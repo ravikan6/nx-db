@@ -1,0 +1,24 @@
+[workspace]
+members = [
+    ".",
+    "nx-core",
+    "driver-postgres"
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+
+[package]
+name = "database"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+nx_core = {path="nx-core"}
+
+driver-postgres = { path = "driver-postgres", optional = true }
+
+[features]
+default = []
+postgres = ["driver-postgres"]

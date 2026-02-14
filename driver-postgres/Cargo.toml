@@ -1,0 +1,8 @@
+[package]
+name = "driver-postgres"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+nx_core = {path="../nx-core"}
+tokio-postgres = "0.7.16"
