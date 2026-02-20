@@ -5,4 +5,4 @@ edition = "2024"
 
 [dependencies]
 nx_core = {path="../nx-core"}
-tokio-postgres = "0.7.16"
+sqlx = "0.8.6"

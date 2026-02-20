@@ -1,5 +1,4 @@
-mod traits;
-
 pub trait Document {
-    fn getId(): Option<String>
+    fn get_id(&self) -> Option<&str>;
+    fn set_id(&mut self, value: &str) -> ();
 }
