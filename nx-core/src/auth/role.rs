@@ -1,10 +1,9 @@
-
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
 use crate::errors::RoleError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub enum RoleName {
     Any,
     Guests,
@@ -65,7 +64,7 @@ impl Display for UserDimension {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct Role {
     role: RoleName,
     identifier: Option<String>,
@@ -159,15 +158,20 @@ impl Role {
         if (role_name == RoleName::Any || role_name == RoleName::Guests)
             && (identifier_part.is_some() || dimension_part.is_some())
         {
-            return Err(RoleError::any_or_guests_cannot_have_identifier_or_dimension(
-                &role_name.to_string(),
-            ));
+            return Err(
+                RoleError::any_or_guests_cannot_have_identifier_or_dimension(
+                    &role_name.to_string(),
+                ),
+            );
         }
 
         Ok(Self::new(role_name, identifier_part, dimension_part))
     }
 
-    pub fn user(identifier: impl Into<String>, status: Option<UserDimension>) -> Result<Self, RoleError> {
+    pub fn user(
+        identifier: impl Into<String>,
+        status: Option<UserDimension>,
+    ) -> Result<Self, RoleError> {
         let identifier = identifier.into();
         if identifier.is_empty() {
             return Err(RoleError::missing_identifier("User"));
@@ -184,7 +188,10 @@ impl Role {
         Self::new(RoleName::Users, None, status.map(|value| value.to_string()))
     }
 
-    pub fn team(identifier: impl Into<String>, dimension: Option<String>) -> Result<Self, RoleError> {
+    pub fn team(
+        identifier: impl Into<String>,
+        dimension: Option<String>,
+    ) -> Result<Self, RoleError> {
         let identifier = identifier.into();
         if identifier.is_empty() {
             return Err(RoleError::missing_identifier("Team"));
@@ -219,7 +226,11 @@ impl Role {
         Ok(Self::new(RoleName::Member, Some(identifier), None))
     }
 
-    pub fn custom(role_name: RoleName, identifier: Option<String>, dimension: Option<String>) -> Self {
+    pub fn custom(
+        role_name: RoleName,
+        identifier: Option<String>,
+        dimension: Option<String>,
+    ) -> Self {
         Self::new(role_name, identifier, dimension)
     }
 }
@@ -255,7 +266,10 @@ mod tests {
     #[test]
     fn formats_roles() {
         assert_eq!(Role::any().to_string(), "any");
-        assert_eq!(Role::users(Some(UserDimension::Verified)).to_string(), "users/verified");
+        assert_eq!(
+            Role::users(Some(UserDimension::Verified)).to_string(),
+            "users/verified"
+        );
         assert_eq!(
             Role::team("team_1", Some("admin".to_string()))
                 .expect("team constructor should work")

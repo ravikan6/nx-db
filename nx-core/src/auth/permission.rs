@@ -1,8 +1,8 @@
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-use crate::errors::PermissionError;
 use super::{Role, RoleName};
+use crate::errors::PermissionError;
 
 pub const PERMISSIONS: [PermissionEnum; 5] = [
     PermissionEnum::Read,
