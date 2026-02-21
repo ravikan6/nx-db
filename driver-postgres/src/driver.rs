@@ -1,6 +1,6 @@
-use nx_core::Context;
 use nx_core::errors::CoreError;
 use nx_core::traits::adapter::Adapter;
+use nx_core::Context;
 use sqlx::{Pool, Postgres};
 use std::future::Future;
 
@@ -11,7 +11,7 @@ pub struct PostgresAdapter<'a> {
 }
 
 impl<'a> PostgresAdapter<'a> {
-     fn is_valid_identifier(identifier: &str) -> bool {
+    fn is_valid_identifier(identifier: &str) -> bool {
         let mut chars = identifier.chars();
         let Some(first) = chars.next() else {
             return false;
@@ -58,7 +58,7 @@ impl<'p> Adapter for PostgresAdapter<'p> {
         &self.context
     }
 
-    fn ping(&self) -> impl Future<Output = Result<(), CoreError>> + Send {
+    fn ping(&self) -> impl Future<Output=Result<(), CoreError>> + Send {
         let pool = self.pool.clone();
         async move {
             sqlx::query_scalar::<_, i32>("SELECT 1")
@@ -74,7 +74,7 @@ impl<'p> Adapter for PostgresAdapter<'p> {
         collection: &'a str,
         id: &'a str,
         payload: &'a str,
-    ) -> impl Future<Output = Result<(), CoreError>> + Send + 'a {
+    ) -> impl Future<Output=Result<(), CoreError>> + Send + 'a {
         async move {
             let table = self.qualified_table_name(collection)?;
             let query = format!("INSERT INTO {table} (id, payload) VALUES ($1, $2::jsonb)");
@@ -93,7 +93,7 @@ impl<'p> Adapter for PostgresAdapter<'p> {
         &'a self,
         collection: &'a str,
         id: &'a str,
-    ) -> impl Future<Output = Result<Option<String>, CoreError>> + Send + 'a {
+    ) -> impl Future<Output=Result<Option<String>, CoreError>> + Send + 'a {
         async move {
             let table = self.qualified_table_name(collection)?;
             let query = format!("SELECT payload::text FROM {table} WHERE id = $1");
@@ -111,7 +111,7 @@ impl<'p> Adapter for PostgresAdapter<'p> {
         collection: &'a str,
         id: &'a str,
         payload: &'a str,
-    ) -> impl Future<Output = Result<bool, CoreError>> + Send + 'a {
+    ) -> impl Future<Output=Result<bool, CoreError>> + Send + 'a {
         async move {
             let table = self.qualified_table_name(collection)?;
             let query =
@@ -131,7 +131,7 @@ impl<'p> Adapter for PostgresAdapter<'p> {
         &'a self,
         collection: &'a str,
         id: &'a str,
-    ) -> impl Future<Output = Result<bool, CoreError>> + Send + 'a {
+    ) -> impl Future<Output=Result<bool, CoreError>> + Send + 'a {
         async move {
             let table = self.qualified_table_name(collection)?;
             let query = format!("DELETE FROM {table} WHERE id = $1");

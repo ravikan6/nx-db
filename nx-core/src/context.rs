@@ -3,6 +3,10 @@ pub struct Context {
     namespace: String,
     database: String,
     schema: String,
+    shared_tables: bool,
+    tenant_id: Option<String>,
+    tenant_per_document: bool,
+
 }
 
 impl Context {
@@ -15,6 +19,9 @@ impl Context {
             namespace: namespace.into(),
             database: database.into(),
             schema: schema.into(),
+            shared_tables: false,
+            tenant_id: None,
+            tenant_per_document: false,
         }
     }
 

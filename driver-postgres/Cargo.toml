@@ -4,5 +4,6 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-nx_core = {path="../nx-core"}
-sqlx = {version = "0.8.6", features = ["postgres"]}
+nx_core = { path = "../nx-core" }
+sqlx = { version = "0.8.6", features = ["postgres"] }
+serde = { version = "1.0.228" }

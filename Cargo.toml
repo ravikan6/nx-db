@@ -15,7 +15,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-nx_core = {path="nx-core"}
+nx_core = { path = "nx-core" }
 
 driver-postgres = { path = "driver-postgres", optional = true }
 
