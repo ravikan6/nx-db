@@ -216,7 +216,7 @@ impl FromStr for Permission {
 #[cfg(test)]
 mod tests {
     use super::{Permission, PermissionEnum};
-    use crate::auth::Role;
+    use crate::utils::Role;
 
     #[test]
     fn formats_permissions() {

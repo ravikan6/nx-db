@@ -84,7 +84,7 @@ impl<'a> Authorization<'a> {
         Self { action, context }
     }
 
-    pub fn validate(&self, permissions: &[String]) -> Result<(), AuthorizationError> {
+    pub fn validate(&self, permissions: &[Role]) -> Result<(), AuthorizationError> {
         if !self.context.status() {
             return Ok(());
         }
@@ -94,7 +94,7 @@ impl<'a> Authorization<'a> {
         }
 
         for permission in permissions {
-            if self.context.is_role(&Role::parse(permission).unwrap()) {
+            if self.context.is_role(permission) {
                 return Ok(());
             }
         }
@@ -103,10 +103,7 @@ impl<'a> Authorization<'a> {
         allowed_scopes.sort();
 
         let configured_roles = self.context.roles();
-        let last_permission = permissions
-            .last()
-            .cloned()
-            .unwrap_or_else(|| "-".to_string());
+        let last_permission = permissions.last().cloned().unwrap();
 
         Err(AuthorizationError::missing_permission(
             self.action,
@@ -120,8 +117,8 @@ impl<'a> Authorization<'a> {
 #[cfg(test)]
 mod tests {
     use super::{Authorization, AuthorizationContext};
-    use crate::auth::{PermissionEnum, Role};
     use crate::errors::AuthorizationErrorKind;
+    use crate::utils::{PermissionEnum, Role};
 
     #[test]
     fn context_authorizes() {
@@ -130,7 +127,7 @@ mod tests {
             .with_status(true);
 
         let auth = Authorization::new(PermissionEnum::Read, &ctx);
-        let ok = auth.validate(&["user:abc".to_string()]);
+        let ok = auth.validate(&[Role::user("abc", None).unwrap()]);
         assert!(ok.is_ok());
     }
 
@@ -140,11 +137,18 @@ mod tests {
         let ctx_two = AuthorizationContext::empty().with_role(Role::label("other-role").unwrap());
 
         let auth = Authorization::new(PermissionEnum::Read, &ctx_one);
-        assert!(auth.validate(&["label:ctx-role".to_string()]).is_ok());
-        assert!(auth.validate(&["label:other-role".to_string()]).is_err());
+        assert!(auth.validate(&[Role::label("ctx-role").unwrap()]).is_ok());
+        assert!(
+            auth.validate(&[Role::label("other-role").unwrap()])
+                .is_err()
+        );
 
         let auth_two = Authorization::new(PermissionEnum::Read, &ctx_two);
-        assert!(auth_two.validate(&["label:other-role".to_string()]).is_ok());
+        assert!(
+            auth_two
+                .validate(&[Role::label("other-role").unwrap()])
+                .is_ok()
+        );
     }
 
     #[test]

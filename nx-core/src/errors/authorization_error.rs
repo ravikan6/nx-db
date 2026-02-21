@@ -1,7 +1,7 @@
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
-use crate::auth::{PermissionEnum, Role};
+use crate::utils::{PermissionEnum, Role};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AuthorizationErrorKind {
@@ -10,8 +10,8 @@ pub enum AuthorizationErrorKind {
     },
     MissingPermission {
         action: String,
-        last_permission: String,
-        allowed_scopes: Vec<String>,
+        last_permission: Role,
+        allowed_scopes: Vec<Role>,
         authorized_roles: Vec<Role>,
     },
     Other {
@@ -47,8 +47,8 @@ impl AuthorizationError {
 
     pub fn missing_permission(
         action: PermissionEnum,
-        last_permission: String,
-        allowed_scopes: Vec<String>,
+        last_permission: Role,
+        allowed_scopes: Vec<Role>,
         authorized_roles: Vec<Role>,
     ) -> Self {
         Self::from_kind(AuthorizationErrorKind::MissingPermission {

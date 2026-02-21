@@ -1,4 +1,4 @@
-use crate::auth;
+use crate::utils;
 use time::OffsetDateTime;
 
 #[derive(Debug, Clone)]
@@ -10,13 +10,13 @@ pub struct Id(String);
 #[derive(Debug, Clone)]
 pub struct Collection {
     id: Id,
-    permissions: Vec<auth::Permission>,
+    permissions: Vec<utils::Permission>,
     created_at: OffsetDateTime,
     updated_at: OffsetDateTime,
 }
 
 impl Collection {
-    pub fn new(id: Id, permissions: Vec<auth::Permission>) -> Self {
+    pub fn new(id: Id, permissions: Vec<utils::Permission>) -> Self {
         let now = OffsetDateTime::now_utc();
 
         Self {
