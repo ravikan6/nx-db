@@ -1,34 +1,41 @@
-use crate::enums::{AttributeKind, IndexKind, OnDeleteAction, Order, RelationshipKind, RelationshipSide, Value};
+use crate::enums::{
+    AttributeKind, IndexKind, OnDeleteAction, Order, RelationshipKind, RelationshipSide, Value,
+};
 use crate::utils;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use time::OffsetDateTime;
+use std::borrow::Cow;
 
 #[derive(Debug, Clone)]
 pub struct InternalId(u128);
 
 #[derive(Debug, Clone, Serialize, Deserialize, Ord, PartialOrd, PartialEq, Eq)]
-pub struct Id(pub String);
+pub struct Id(Cow<'static, str>);
 
 impl Id {
-    pub fn new(value: &str) -> Id {
-        Id(value.to_string())
+    pub fn from_static(s: &'static str) -> Self {
+        Id(Cow::Borrowed(s))
+    }
+
+    pub fn new<S: Into<String>>(s: S) -> Self {
+        Id(Cow::Owned(s.into()))
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Collection {
-    id: Id,
-    permissions: Vec<utils::Permission>,
-    created_at: OffsetDateTime,
-    updated_at: OffsetDateTime,
-    collection: Id,
-    name: String,
-    document_security: bool,
-    enabled: bool,
-    version: u64,
-    attributes: BTreeMap<Id, Attribute>,
-    indexes: BTreeMap<Id, Index>,
+    pub id: Id,
+    pub permissions: Vec<utils::Permission>,
+    pub created_at: Option<OffsetDateTime>,
+    pub updated_at: Option<OffsetDateTime>,
+    pub collection: Id,
+    pub name: String,
+    pub document_security: bool,
+    pub enabled: bool,
+    pub version: u64,
+    pub attributes: BTreeMap<Id, Attribute>,
+    pub indexes: BTreeMap<Id, Index>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,35 +72,62 @@ pub struct Index {
 }
 
 impl Collection {
-    // pub fn new(id: Id, permissions: Vec<utils::Permission>) -> Self {
-    //     let now = OffsetDateTime::now_utc();
-    //
-    //     Self {
-    //         id,
-    //         permissions,
-    //         created_at: now,
-    //         updated_at: now,
-    //     }
-    // }
+    pub fn new(id: Id, name: impl Into<String>, collection_id: Id) -> Self {
+        let now = OffsetDateTime::now_utc();
 
-    pub fn touch(&mut self) {
-        self.updated_at = OffsetDateTime::now_utc();
+        Self {
+            id,
+            permissions: Vec::new(),
+            created_at: Some(now),
+            updated_at: Some(now),
+            name: name.into(),
+            collection: collection_id,
+            document_security: false,
+            enabled: true,
+            version: 1,
+            attributes: BTreeMap::new(),
+            indexes: BTreeMap::new(),
+        }
+    }
+
+    pub fn set_attributes(mut self, attributes: BTreeMap<Id, Attribute>) -> Self {
+        self.attributes = attributes;
+        self
+    }
+
+    pub fn set_indexes(mut self, indexes: BTreeMap<Id, Index>) -> Self {
+        self.indexes = indexes;
+        self
     }
 }
 
-
 impl Attribute {
-    pub fn system(kind: AttributeKind, size: Option<u64>, required: bool, array: bool) -> Self {
+    pub fn new(kind: AttributeKind) -> Self {
         Self {
             kind,
-            size,
-            required,
-            array,
+            size: None,
+            required: false,
+            array: false,
             filters: None,
             format: None,
             format_options: None,
             default: None,
             options: AttributeOptions::None,
         }
+    }
+
+    pub fn max_len(mut self, len: u64) -> Self {
+        self.size = Some(len);
+        self
+    }
+
+    pub fn required(mut self) -> Self {
+        self.required = true;
+        self
+    }
+
+    pub fn array(mut self) -> Self {
+        self.array = true;
+        self
     }
 }
