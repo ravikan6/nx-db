@@ -4,40 +4,40 @@ use std::fmt::{Display, Formatter};
 use super::{AuthorizationError, PermissionError, RoleError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CoreError {
+pub enum DatabaseError {
     Role(RoleError),
     Permission(PermissionError),
     Authorization(AuthorizationError),
     Other(String),
 }
 
-impl Display for CoreError {
+impl Display for DatabaseError {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            CoreError::Role(error) => write!(f, "{error}"),
-            CoreError::Permission(error) => write!(f, "{error}"),
-            CoreError::Authorization(error) => write!(f, "{error}"),
-            CoreError::Other(message) => write!(f, "{message}"),
+            DatabaseError::Role(error) => write!(f, "{error}"),
+            DatabaseError::Permission(error) => write!(f, "{error}"),
+            DatabaseError::Authorization(error) => write!(f, "{error}"),
+            DatabaseError::Other(message) => write!(f, "{message}"),
         }
     }
 }
 
-impl Error for CoreError {}
+impl Error for DatabaseError {}
 
-impl From<RoleError> for CoreError {
+impl From<RoleError> for DatabaseError {
     fn from(value: RoleError) -> Self {
-        CoreError::Role(value)
+        DatabaseError::Role(value)
     }
 }
 
-impl From<PermissionError> for CoreError {
+impl From<PermissionError> for DatabaseError {
     fn from(value: PermissionError) -> Self {
-        CoreError::Permission(value)
+        DatabaseError::Permission(value)
     }
 }
 
-impl From<AuthorizationError> for CoreError {
+impl From<AuthorizationError> for DatabaseError {
     fn from(value: AuthorizationError) -> Self {
-        CoreError::Authorization(value)
+        DatabaseError::Authorization(value)
     }
 }

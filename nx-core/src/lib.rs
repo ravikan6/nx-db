@@ -6,6 +6,7 @@ pub mod traits;
 pub mod utils;
 mod enums;
 mod constants;
+mod database;
 
 pub use context::*;
 pub use doc::*;

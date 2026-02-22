@@ -1,4 +1,4 @@
-use nx_core::errors::CoreError;
+use nx_core::errors::DatabaseError;
 use nx_core::traits::adapter::Adapter;
 use nx_core::Context;
 use sqlx::{Pool, Postgres};
@@ -24,17 +24,17 @@ impl<'a> PostgresAdapter<'a> {
         chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
     }
 
-    fn qualified_table_name(&self, collection: &str) -> Result<String, CoreError> {
+    fn qualified_table_name(&self, collection: &str) -> Result<String, DatabaseError> {
         let schema = self.context.schema();
 
         if !Self::is_valid_identifier(schema) {
-            return Err(CoreError::Other(format!(
+            return Err(DatabaseError::Other(format!(
                 "invalid schema identifier: {schema}"
             )));
         }
 
         if !Self::is_valid_identifier(collection) {
-            return Err(CoreError::Other(format!(
+            return Err(DatabaseError::Other(format!(
                 "invalid collection identifier: {collection}"
             )));
         }
@@ -58,14 +58,14 @@ impl<'p> Adapter for PostgresAdapter<'p> {
         &self.context
     }
 
-    fn ping(&self) -> impl Future<Output=Result<(), CoreError>> + Send {
+    fn ping(&self) -> impl Future<Output=Result<(), DatabaseError>> + Send {
         let pool = self.pool.clone();
         async move {
             sqlx::query_scalar::<_, i32>("SELECT 1")
                 .fetch_one(&pool)
                 .await
                 .map(|_| ())
-                .map_err(|error| CoreError::Other(format!("postgres ping failed: {error}")))
+                .map_err(|error| DatabaseError::Other(format!("postgres ping failed: {error}")))
         }
     }
 
@@ -74,7 +74,7 @@ impl<'p> Adapter for PostgresAdapter<'p> {
         collection: &'a str,
         id: &'a str,
         payload: &'a str,
-    ) -> impl Future<Output=Result<(), CoreError>> + Send + 'a {
+    ) -> impl Future<Output=Result<(), DatabaseError>> + Send + 'a {
         async move {
             let table = self.qualified_table_name(collection)?;
             let query = format!("INSERT INTO {table} (id, payload) VALUES ($1, $2::jsonb)");
@@ -85,7 +85,7 @@ impl<'p> Adapter for PostgresAdapter<'p> {
                 .execute(self.pool)
                 .await
                 .map(|_| ())
-                .map_err(|error| CoreError::Other(format!("postgres create failed: {error}")))
+                .map_err(|error| DatabaseError::Other(format!("postgres create failed: {error}")))
         }
     }
 
@@ -93,7 +93,7 @@ impl<'p> Adapter for PostgresAdapter<'p> {
         &'a self,
         collection: &'a str,
         id: &'a str,
-    ) -> impl Future<Output=Result<Option<String>, CoreError>> + Send + 'a {
+    ) -> impl Future<Output=Result<Option<String>, DatabaseError>> + Send + 'a {
         async move {
             let table = self.qualified_table_name(collection)?;
             let query = format!("SELECT payload::text FROM {table} WHERE id = $1");
@@ -102,7 +102,7 @@ impl<'p> Adapter for PostgresAdapter<'p> {
                 .bind(id)
                 .fetch_optional(self.pool)
                 .await
-                .map_err(|error| CoreError::Other(format!("postgres read failed: {error}")))
+                .map_err(|error| DatabaseError::Other(format!("postgres read failed: {error}")))
         }
     }
 
@@ -111,7 +111,7 @@ impl<'p> Adapter for PostgresAdapter<'p> {
         collection: &'a str,
         id: &'a str,
         payload: &'a str,
-    ) -> impl Future<Output=Result<bool, CoreError>> + Send + 'a {
+    ) -> impl Future<Output=Result<bool, DatabaseError>> + Send + 'a {
         async move {
             let table = self.qualified_table_name(collection)?;
             let query =
@@ -123,7 +123,7 @@ impl<'p> Adapter for PostgresAdapter<'p> {
                 .execute(self.pool)
                 .await
                 .map(|result| result.rows_affected() > 0)
-                .map_err(|error| CoreError::Other(format!("postgres update failed: {error}")))
+                .map_err(|error| DatabaseError::Other(format!("postgres update failed: {error}")))
         }
     }
 
@@ -131,7 +131,7 @@ impl<'p> Adapter for PostgresAdapter<'p> {
         &'a self,
         collection: &'a str,
         id: &'a str,
-    ) -> impl Future<Output=Result<bool, CoreError>> + Send + 'a {
+    ) -> impl Future<Output=Result<bool, DatabaseError>> + Send + 'a {
         async move {
             let table = self.qualified_table_name(collection)?;
             let query = format!("DELETE FROM {table} WHERE id = $1");
@@ -141,7 +141,7 @@ impl<'p> Adapter for PostgresAdapter<'p> {
                 .execute(self.pool)
                 .await
                 .map(|result| result.rows_affected() > 0)
-                .map_err(|error| CoreError::Other(format!("postgres delete failed: {error}")))
+                .map_err(|error| DatabaseError::Other(format!("postgres delete failed: {error}")))
         }
     }
 }

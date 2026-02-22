@@ -3,9 +3,10 @@ use crate::enums::{
 };
 use crate::utils;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-use time::OffsetDateTime;
 use std::borrow::Cow;
+use std::collections::BTreeMap;
+use std::fmt::{Display, Formatter};
+use time::OffsetDateTime;
 
 #[derive(Debug, Clone)]
 pub struct InternalId(u128);
@@ -20,6 +21,12 @@ impl Id {
 
     pub fn new<S: Into<String>>(s: S) -> Self {
         Id(Cow::Owned(s.into()))
+    }
+}
+
+impl Display for Id {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
     }
 }
 
