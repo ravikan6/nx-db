@@ -1,12 +1,26 @@
 mod collection;
 mod context;
+mod database;
 pub mod doc;
 pub mod errors;
+pub mod events;
+pub mod key;
+pub mod model;
+pub mod registry;
+pub mod repository;
+pub mod schema;
 pub mod traits;
 pub mod utils;
 mod enums;
 mod constants;
-mod database;
 
 pub use context::*;
+pub use database::*;
 pub use doc::*;
+pub use enums::*;
+pub use events::*;
+pub use key::*;
+pub use model::*;
+pub use registry::*;
+pub use repository::*;
+pub use schema::*;
