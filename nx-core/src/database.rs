@@ -1928,7 +1928,7 @@ mod tests {
         let registry = StaticRegistry::new()
             .register(&RESTRICTED_USERS)
             .expect("registry should accept collection");
-        let cache = Arc::new(database_cache::MemoryCacheBackend::new());
+        let cache = Arc::new(database_cache::MemoryCacheBackend::default());
         let database = Database::new(adapter, registry).with_cache(cache);
         let reader_role = Role::user("reader", None).expect("reader role should parse");
         let reader_repo = database
@@ -1953,7 +1953,7 @@ mod tests {
         let registry = StaticRegistry::new()
             .register(&USERS)
             .expect("registry should accept collection");
-        let cache = Arc::new(database_cache::MemoryCacheBackend::new());
+        let cache = Arc::new(database_cache::MemoryCacheBackend::default());
         let database = Database::new(FakeAdapter::default(), registry).with_cache(cache.clone());
         let repo = database.repo::<User>();
         let id = Key::<32>::new("usr_cached_flow").expect("valid id");

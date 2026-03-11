@@ -1,20 +1,47 @@
 use crate::{CacheBackend, CacheError, CacheFuture, CacheKey, CacheWrite, Namespace};
 use bytes::Bytes;
 use moka::future::Cache;
+use moka::Expiry;
 use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+struct MemoryCacheExpiry;
+
+impl Expiry<String, (Bytes, Option<Duration>)> for MemoryCacheExpiry {
+    fn expire_after_create(
+        &self,
+        _key: &String,
+        value: &(Bytes, Option<Duration>),
+        _current_time: Instant,
+    ) -> Option<Duration> {
+        value.1
+    }
+
+    fn expire_after_update(
+        &self,
+        _key: &String,
+        value: &(Bytes, Option<Duration>),
+        _updated_at: Instant,
+        _duration_until_expiry: Option<Duration>,
+    ) -> Option<Duration> {
+        value.1
+    }
+}
 
 pub struct MemoryCacheBackend {
-    cache: Cache<String, Bytes>,
+    cache: Cache<String, (Bytes, Option<Duration>)>,
     namespaces: Arc<RwLock<std::collections::HashMap<String, HashSet<String>>>>,
 }
 
 impl MemoryCacheBackend {
     pub fn new(max_capacity: u64) -> Self {
         Self {
-            cache: Cache::new(max_capacity),
+            cache: Cache::builder()
+                .max_capacity(max_capacity)
+                .expire_after(MemoryCacheExpiry)
+                .build(),
             namespaces: Arc::new(RwLock::new(std::collections::HashMap::new())),
         }
     }
@@ -49,7 +76,7 @@ impl CacheBackend for MemoryCacheBackend {
         key: &'a CacheKey,
     ) -> CacheFuture<'a, Result<Option<Bytes>, CacheError>> {
         let qualified = Self::qualified_key(namespace, key);
-        Box::pin(async move { Ok(self.cache.get(&qualified).await) })
+        Box::pin(async move { Ok(self.cache.get(&qualified).await.map(|(v, _)| v)) })
     }
 
     fn get_many<'a>(
@@ -61,7 +88,7 @@ impl CacheBackend for MemoryCacheBackend {
             let mut results = Vec::with_capacity(keys.len());
             for key in keys {
                 let qualified = Self::qualified_key(namespace, key);
-                results.push(self.cache.get(&qualified).await);
+                results.push(self.cache.get(&qualified).await.map(|(v, _)| v));
             }
             Ok(results)
         })
@@ -75,13 +102,9 @@ impl CacheBackend for MemoryCacheBackend {
         let qualified = Self::qualified_key(namespace, &write.key);
         let namespace_str = namespace.to_string();
         Box::pin(async move {
-            if let Some(ttl) = write.ttl {
-                self.cache
-                    .insert_with_ttl(qualified.clone(), write.value, ttl)
-                    .await;
-            } else {
-                self.cache.insert(qualified.clone(), write.value).await;
-            }
+            self.cache
+                .insert(qualified.clone(), (write.value, write.ttl))
+                .await;
             self.register_key(&namespace_str, qualified);
             Ok(())
         })
@@ -96,15 +119,9 @@ impl CacheBackend for MemoryCacheBackend {
         Box::pin(async move {
             for write in writes {
                 let qualified = Self::qualified_key(namespace, &write.key);
-                if let Some(ttl) = write.ttl {
-                    self.cache
-                        .insert_with_ttl(qualified.clone(), write.value.clone(), ttl)
-                        .await;
-                } else {
-                    self.cache
-                        .insert(qualified.clone(), write.value.clone())
-                        .await;
-                }
+                self.cache
+                    .insert(qualified.clone(), (write.value.clone(), write.ttl))
+                    .await;
                 self.register_key(&namespace_str, qualified);
             }
             Ok(())
@@ -173,7 +190,7 @@ impl CacheBackend for MemoryCacheBackend {
 #[cfg(test)]
 mod tests {
     use super::MemoryCacheBackend;
-    use crate::{Cache, CacheKey, CacheWrite, Namespace};
+    use crate::{Cache, CacheBackend, CacheKey, CacheWrite, Namespace};
     use bytes::Bytes;
     use std::time::Duration;
 

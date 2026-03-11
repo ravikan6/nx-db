@@ -6,6 +6,7 @@ use database::{
     AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, Database,
     DatabaseError, FIELD_PERMISSIONS, Key, Model, QuerySpec, Role, insert_value, take_required,
 };
+use serde::{Deserialize, Serialize};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::{Executor, Row};
 use std::collections::BTreeSet;
@@ -43,11 +44,12 @@ static RESTRICTED_USERS_SCHEMA: CollectionSchema = CollectionSchema {
     indexes: &[],
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct RestrictedUserEntity {
     id: Key<32>,
     name: String,
 }
+
 
 #[derive(Debug, Clone)]
 struct CreateRestrictedUser {

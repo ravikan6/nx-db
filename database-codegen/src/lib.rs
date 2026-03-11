@@ -108,7 +108,9 @@ pub struct AttributeSpec {
 #[serde(rename_all = "camelCase")]
 pub struct RelationshipSpec {
     pub related_collection: String,
+    #[serde(default)]
     pub kind: RelationshipKindSpec,
+    #[serde(default)]
     pub side: RelationshipSideSpec,
     #[serde(default)]
     pub two_way: bool,
@@ -117,27 +119,30 @@ pub struct RelationshipSpec {
     pub on_delete: OnDeleteActionSpec,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum RelationshipKindSpec {
+    #[default]
     OneToOne,
     OneToMany,
     ManyToOne,
     ManyToMany,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum RelationshipSideSpec {
+    #[default]
     Parent,
     Child,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum OnDeleteActionSpec {
     SetNull,
     Cascade,
+    #[default]
     Restrict,
 }
 

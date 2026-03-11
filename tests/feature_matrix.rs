@@ -16,14 +16,15 @@ fn run_check(args: &[&str], label: &str) {
     let temp_dir = temp_dir(label);
     std::fs::create_dir_all(&temp_dir).expect("temp dir should be created");
 
-    let output = Command::new("fish")
-        .arg("-lc")
-        .arg(format!("cargo check --quiet {}", args.join(" ")))
+    let output = Command::new(env!("CARGO"))
+        .arg("check")
+        .arg("--quiet")
+        .args(args)
         .current_dir(workspace_root())
         .env("CARGO_TARGET_DIR", target_dir(label))
         .env("TMPDIR", &temp_dir)
         .output()
-        .expect("cargo check should run through fish");
+        .expect("cargo check should run");
 
     assert!(
         output.status.success(),
