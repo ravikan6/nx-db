@@ -1,0 +1,42 @@
+{
+  "module": "virtual_app_models",
+  "resolvers": [
+    {
+      "name": "profileLabel",
+      "outputType": "String",
+      "resolve": "crate::resolvers::resolve_profile_label"
+    }
+  ],
+  "collections": [
+    {
+      "id": "users",
+      "name": "Users",
+      "model": "User",
+      "documentSecurity": true,
+      "permissions": [
+        "read(\"any\")",
+        "create(\"any\")",
+        "update(\"any\")",
+        "delete(\"any\")"
+      ],
+      "idMaxLength": 32,
+      "attributes": [
+        {
+          "id": "name",
+          "kind": "string",
+          "required": true
+        },
+        {
+          "id": "active",
+          "kind": "boolean",
+          "required": true
+        },
+        {
+          "id": "profileLabel",
+          "kind": "virtual",
+          "resolver": "profileLabel"
+        }
+      ]
+    }
+  ]
+}

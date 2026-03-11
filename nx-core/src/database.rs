@@ -1,16 +1,29 @@
-use crate::events::{Event, EventBus, NoopEventBus};
+use crate::Context;
 use crate::errors::DatabaseError;
+use crate::events::{Event, EventBus, NoopEventBus};
 use crate::model::Model;
+use crate::query::QuerySpec;
 use crate::registry::CollectionRegistry;
 use crate::repository::{Repository, ScopedDatabase};
 use crate::schema::CollectionSchema;
+use crate::system_fields::is_system_field;
 use crate::traits::storage::{StorageAdapter, StorageRecord, StorageValue};
-use crate::Context;
+use crate::utils::{Authorization, AuthorizationContext, Permission, PermissionEnum, Role};
+use database_cache::{CacheBackend, CacheKey, CacheWrite};
+use std::sync::Arc;
+use std::time::Duration;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthorizationScope {
+    Collection,
+    Document,
+}
 
 pub struct Database<A, R, E = NoopEventBus> {
     adapter: A,
     registry: R,
     events: E,
+    cache: Option<Arc<dyn CacheBackend>>,
 }
 
 impl<A, R> Database<A, R, NoopEventBus> {
@@ -19,7 +32,13 @@ impl<A, R> Database<A, R, NoopEventBus> {
             adapter,
             registry,
             events: NoopEventBus,
+            cache: None,
         }
+    }
+
+    pub fn with_cache(mut self, cache: Arc<dyn CacheBackend>) -> Self {
+        self.cache = Some(cache);
+        self
     }
 }
 
@@ -29,7 +48,13 @@ impl<A, R, E> Database<A, R, E> {
             adapter,
             registry,
             events,
+            cache: None,
         }
+    }
+
+    pub fn with_cache_backend(mut self, cache: Arc<dyn CacheBackend>) -> Self {
+        self.cache = Some(cache);
+        self
     }
 
     pub fn adapter(&self) -> &A {
@@ -42,6 +67,10 @@ impl<A, R, E> Database<A, R, E> {
 
     pub fn events(&self) -> &E {
         &self.events
+    }
+
+    pub fn cache(&self) -> Option<&dyn CacheBackend> {
+        self.cache.as_deref()
     }
 
     pub fn scope(&self, context: Context) -> ScopedDatabase<'_, A, R, E> {
@@ -72,7 +101,7 @@ where
     pub fn collection(&self, id: &str) -> Result<&'static CollectionSchema, DatabaseError> {
         self.registry
             .get(id)
-            .ok_or_else(|| DatabaseError::Other(format!("collection '{id}' is not registered")))
+            .ok_or_else(|| DatabaseError::NotFound(format!("collection '{id}' is not registered")))
     }
 
     pub fn validate_registry(&self) -> Result<(), DatabaseError> {
@@ -84,8 +113,25 @@ where
         collection: &'static CollectionSchema,
         record: &StorageRecord,
     ) -> Result<(), DatabaseError> {
+        self.validate_record_fields(collection, record)?;
+        self.validate_required_attributes(collection, record)
+    }
+
+    pub fn validate_partial_record(
+        &self,
+        collection: &'static CollectionSchema,
+        record: &StorageRecord,
+    ) -> Result<(), DatabaseError> {
+        self.validate_record_fields(collection, record)
+    }
+
+    fn validate_record_fields(
+        &self,
+        collection: &'static CollectionSchema,
+        record: &StorageRecord,
+    ) -> Result<(), DatabaseError> {
         for key in record.keys() {
-            if key.starts_with('$') || key.starts_with('_') {
+            if key.starts_with('_') || is_system_field(key) {
                 continue;
             }
 
@@ -97,6 +143,14 @@ where
             }
         }
 
+        Ok(())
+    }
+
+    fn validate_required_attributes(
+        &self,
+        collection: &'static CollectionSchema,
+        record: &StorageRecord,
+    ) -> Result<(), DatabaseError> {
         for attribute in collection.persisted_attributes() {
             if !attribute.required {
                 continue;
@@ -116,6 +170,69 @@ where
         Ok(())
     }
 
+    pub fn validate_query(
+        &self,
+        collection: &'static CollectionSchema,
+        query: &QuerySpec,
+    ) -> Result<(), DatabaseError> {
+        for filter in query.filters() {
+            if !is_system_field(&filter.field) {
+                let attribute = collection.attribute(&filter.field).ok_or_else(|| {
+                    DatabaseError::Other(format!(
+                        "collection '{}': unknown query field '{}'",
+                        collection.id, filter.field
+                    ))
+                })?;
+                if attribute.persistence != crate::AttributePersistence::Persisted {
+                    return Err(DatabaseError::Other(format!(
+                        "collection '{}': virtual field '{}' cannot be used in filters",
+                        collection.id, filter.field
+                    )));
+                }
+            }
+        }
+
+        for sort in query.sorts() {
+            if !is_system_field(&sort.field) {
+                let attribute = collection.attribute(&sort.field).ok_or_else(|| {
+                    DatabaseError::Other(format!(
+                        "collection '{}': unknown sort field '{}'",
+                        collection.id, sort.field
+                    ))
+                })?;
+                if attribute.persistence != crate::AttributePersistence::Persisted {
+                    return Err(DatabaseError::Other(format!(
+                        "collection '{}': virtual field '{}' cannot be used in sorts",
+                        collection.id, sort.field
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn authorize_collection(
+        &self,
+        context: &Context,
+        collection: &'static CollectionSchema,
+        action: PermissionEnum,
+    ) -> Result<(), DatabaseError> {
+        let authorization_context = self.authorization_context(context);
+        let allowed_roles = self.collection_permission_roles(collection, action)?;
+        Authorization::new(action, &authorization_context)
+            .validate(&allowed_roles)
+            .map_err(DatabaseError::from)
+    }
+
+    fn collection_permission_roles(
+        &self,
+        collection: &'static CollectionSchema,
+        action: PermissionEnum,
+    ) -> Result<Vec<Role>, DatabaseError> {
+        self.permission_roles(collection.permissions.iter().copied(), action)
+    }
+
     pub async fn ping(&self) -> Result<(), DatabaseError> {
         self.adapter.ping(&Context::default()).await
     }
@@ -133,57 +250,666 @@ where
     ) -> Result<(), DatabaseError> {
         collection.validate()?;
         self.adapter.create_collection(context, collection).await?;
-        self.events.dispatch(Event::collection_created(collection.id));
+        self.events
+            .dispatch(Event::collection_created(collection.id));
         Ok(())
     }
+
+    pub async fn insert_model<M>(
+        &self,
+        context: &Context,
+        input: M::Create,
+    ) -> Result<M::Entity, DatabaseError>
+    where
+        M: Model,
+        M::Entity: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        let collection = self.collection(M::schema().id)?;
+        self.authorize_collection(context, collection, PermissionEnum::Create)?;
+
+        let record = M::create_to_record(input, context)?;
+        let encoded = self.prepare_record_for_storage::<M>(context, collection, record, false)?;
+
+        let stored = self.adapter.insert(context, collection, encoded).await?;
+        let entity = self
+            .materialize_entity::<M>(context, stored.clone())
+            .await?;
+
+        // Populate cache on insert
+        if let Some(cache) = &self.cache {
+            let id_str = M::id_to_string(M::entity_to_id(&entity));
+            let cache_key = self.build_cache_key(collection.id, &id_str);
+            self.write_cache::<M>(cache.as_ref(), &cache_key, &stored, &entity)
+                .await?;
+        }
+
+        self.events.dispatch(Event::document_created(
+            collection.id,
+            M::id_to_string(M::entity_to_id(&entity)),
+        ));
+
+        Ok(entity)
+    }
+
+    pub async fn update_model<M>(
+        &self,
+        context: &Context,
+        id: &M::Id,
+        input: M::Update,
+    ) -> Result<Option<M::Entity>, DatabaseError>
+    where
+        M: Model,
+    {
+        let collection = self.collection(M::schema().id)?;
+        let authorization =
+            self.authorization_scope(context, collection, PermissionEnum::Update)?;
+        let id_str = M::id_to_string(id);
+
+        let record = M::update_to_record(input, context)?;
+        let encoded = self.prepare_record_for_storage::<M>(context, collection, record, true)?;
+
+        if authorization == AuthorizationScope::Document
+            && !self
+                .adapter
+                .enforces_document_filtering(PermissionEnum::Update)
+        {
+            let existing = self.adapter.get(context, collection, &id_str).await?;
+
+            let Some(existing) = existing else {
+                return Ok(None);
+            };
+
+            self.authorize_document(context, collection, PermissionEnum::Update, &existing)?;
+        }
+
+        let stored = self
+            .adapter
+            .update(context, collection, &id_str, encoded)
+            .await?;
+
+        let Some(stored) = stored else {
+            return Ok(None);
+        };
+
+        let entity = self
+            .materialize_entity::<M>(context, stored.clone())
+            .await?;
+
+        // Invalidate cache on update, next get will repopulate
+        if let Some(cache) = &self.cache {
+            self.invalidate_cache(cache.as_ref(), collection.id, &id_str)
+                .await?;
+        }
+
+        self.events.dispatch(Event::document_updated(
+            collection.id,
+            M::id_to_string(M::entity_to_id(&entity)),
+        ));
+
+        Ok(Some(entity))
+    }
+
+    pub async fn delete_model<M>(
+        &self,
+        context: &Context,
+        id: &M::Id,
+    ) -> Result<bool, DatabaseError>
+    where
+        M: Model,
+    {
+        let collection = self.collection(M::schema().id)?;
+        let authorization =
+            self.authorization_scope(context, collection, PermissionEnum::Delete)?;
+        let id_str = M::id_to_string(id);
+
+        if authorization == AuthorizationScope::Document
+            && !self
+                .adapter
+                .enforces_document_filtering(PermissionEnum::Delete)
+        {
+            let existing = self.adapter.get(context, collection, &id_str).await?;
+
+            let Some(existing) = existing else {
+                return Ok(false);
+            };
+
+            self.authorize_document(context, collection, PermissionEnum::Delete, &existing)?;
+        }
+
+        let deleted = self.adapter.delete(context, collection, &id_str).await?;
+
+        // Invalidate cache on delete
+        if deleted {
+            if let Some(cache) = &self.cache {
+                self.invalidate_cache(cache.as_ref(), collection.id, &id_str)
+                    .await?;
+            }
+            self.events
+                .dispatch(Event::document_deleted(collection.id, id_str));
+        }
+
+        Ok(deleted)
+    }
+
+    pub async fn get_model<M>(
+        &self,
+        context: &Context,
+        id: &M::Id,
+    ) -> Result<Option<M::Entity>, DatabaseError>
+    where
+        M: Model,
+        M::Entity: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        let collection = self.collection(M::schema().id)?;
+        let authorization = self.authorization_scope(context, collection, PermissionEnum::Read)?;
+        let id_str = M::id_to_string(id);
+
+        // Try cache first for get operations
+        if let Some(cache) = &self.cache {
+            let cache_key = self.build_cache_key(collection.id, &id_str);
+            if let Some(cached) = self.read_cache(cache.as_ref(), &cache_key).await? {
+                // Check document permissions on cached data
+                if authorization == AuthorizationScope::Document {
+                    if !self.is_cached_document_authorized(
+                        context,
+                        &cached,
+                        PermissionEnum::Read,
+                    )? {
+                        let authorization_context = self.authorization_context(context);
+                        let roles = self.permission_roles(
+                            cached
+                                .permissions
+                                .iter()
+                                .map(|permission| permission.as_str()),
+                            PermissionEnum::Read,
+                        )?;
+                        Authorization::new(PermissionEnum::Read, &authorization_context)
+                            .validate(&roles)
+                            .map_err(DatabaseError::from)?;
+                    }
+                }
+                // Decode cached entity
+                let entity = self.decode_cached_entity::<M>(&cached, context)?;
+                return Ok(Some(entity));
+            }
+        }
+
+        // Cache miss - go to adapter
+        let record = self.adapter.get(context, collection, &id_str).await?;
+
+        let Some(record) = record else {
+            return Ok(None);
+        };
+
+        if authorization == AuthorizationScope::Document
+            && !self
+                .adapter
+                .enforces_document_filtering(PermissionEnum::Read)
+        {
+            self.authorize_read_record(context, collection, authorization, &record)?;
+        }
+
+        let entity = self
+            .materialize_entity::<M>(context, record.clone())
+            .await?;
+
+        // Populate cache after successful read
+        if let Some(cache) = &self.cache {
+            let cache_key = self.build_cache_key(collection.id, &id_str);
+            self.write_cache::<M>(cache.as_ref(), &cache_key, &record, &entity)
+                .await?;
+        }
+
+        Ok(Some(entity))
+    }
+
+    pub async fn find_models<M>(
+        &self,
+        context: &Context,
+        query: &QuerySpec,
+    ) -> Result<Vec<M::Entity>, DatabaseError>
+    where
+        M: Model,
+    {
+        let collection = self.collection(M::schema().id)?;
+        self.validate_query(collection, query)?;
+        let authorization = self.authorization_scope(context, collection, PermissionEnum::Read)?;
+        let records = self.adapter.find(context, collection, query).await?;
+        let filtered = if authorization == AuthorizationScope::Document
+            && !self
+                .adapter
+                .enforces_document_filtering(PermissionEnum::Read)
+        {
+            self.filter_authorized_records(context, collection, authorization, records)?
+        } else {
+            records
+        };
+
+        let mut entities = Vec::with_capacity(filtered.len());
+        for record in filtered {
+            entities.push(self.materialize_entity::<M>(context, record).await?);
+        }
+
+        Ok(entities)
+    }
+
+    pub async fn count_models<M>(
+        &self,
+        context: &Context,
+        query: &QuerySpec,
+    ) -> Result<u64, DatabaseError>
+    where
+        M: Model,
+    {
+        let collection = self.collection(M::schema().id)?;
+        self.validate_query(collection, query)?;
+
+        match self.authorization_scope(context, collection, PermissionEnum::Read)? {
+            AuthorizationScope::Collection => self.adapter.count(context, collection, query).await,
+            AuthorizationScope::Document => {
+                if self
+                    .adapter
+                    .enforces_document_filtering(PermissionEnum::Read)
+                {
+                    self.adapter.count(context, collection, query).await
+                } else {
+                    let records = self.adapter.find(context, collection, query).await?;
+                    let filtered = self.filter_authorized_records(
+                        context,
+                        collection,
+                        AuthorizationScope::Document,
+                        records,
+                    )?;
+                    Ok(filtered.len() as u64)
+                }
+            }
+        }
+    }
+
+    pub async fn materialize_entity<M>(
+        &self,
+        context: &Context,
+        record: StorageRecord,
+    ) -> Result<M::Entity, DatabaseError>
+    where
+        M: Model,
+    {
+        let collection = self.collection(M::schema().id)?;
+        let decoded = M::decode_record(record, context)?;
+        self.validate_storage_record(collection, &decoded)?;
+        let entity = M::entity_from_record(decoded, context)?;
+        M::resolve_entity(entity, context).await
+    }
+
+    fn prepare_record_for_storage<M>(
+        &self,
+        context: &Context,
+        collection: &'static CollectionSchema,
+        record: StorageRecord,
+        partial: bool,
+    ) -> Result<StorageRecord, DatabaseError>
+    where
+        M: Model,
+    {
+        if partial {
+            self.validate_partial_record(collection, &record)?;
+        } else {
+            self.validate_storage_record(collection, &record)?;
+        }
+
+        let encoded = M::encode_record(record, context)?;
+
+        if partial {
+            self.validate_partial_record(collection, &encoded)?;
+        } else {
+            self.validate_storage_record(collection, &encoded)?;
+        }
+
+        Ok(encoded)
+    }
+
+    fn authorization_context(&self, context: &Context) -> AuthorizationContext {
+        let roles = context.roles().cloned().collect::<Vec<Role>>();
+        if context.authorization_enabled() {
+            AuthorizationContext::enabled(roles)
+        } else {
+            AuthorizationContext::disabled(roles)
+        }
+    }
+
+    fn permission_roles<'a, I>(
+        &self,
+        permissions: I,
+        action: PermissionEnum,
+    ) -> Result<Vec<Role>, DatabaseError>
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        let mut roles = Vec::new();
+
+        for permission in permissions {
+            let permission = Permission::parse(permission)
+                .map_err(|error| DatabaseError::Other(format!("invalid permission: {error}")))?;
+
+            let matches = match (permission.permission(), action) {
+                (PermissionEnum::Write, PermissionEnum::Create)
+                | (PermissionEnum::Write, PermissionEnum::Update)
+                | (PermissionEnum::Write, PermissionEnum::Delete) => true,
+                (current, target) => current == target,
+            };
+
+            if matches {
+                roles.push(permission.role_instance().clone());
+            }
+        }
+
+        Ok(roles)
+    }
+
+    fn authorization_scope(
+        &self,
+        context: &Context,
+        collection: &'static CollectionSchema,
+        action: PermissionEnum,
+    ) -> Result<AuthorizationScope, DatabaseError> {
+        match self.authorize_collection(context, collection, action) {
+            Ok(()) => Ok(AuthorizationScope::Collection),
+            Err(DatabaseError::Authorization(_)) if collection.document_security => {
+                Ok(AuthorizationScope::Document)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn authorize_read_record(
+        &self,
+        context: &Context,
+        collection: &'static CollectionSchema,
+        authorization: AuthorizationScope,
+        record: &StorageRecord,
+    ) -> Result<(), DatabaseError> {
+        match authorization {
+            AuthorizationScope::Collection => Ok(()),
+            AuthorizationScope::Document => {
+                self.authorize_document(context, collection, PermissionEnum::Read, record)
+            }
+        }
+    }
+
+    fn filter_authorized_records(
+        &self,
+        context: &Context,
+        collection: &'static CollectionSchema,
+        authorization: AuthorizationScope,
+        records: Vec<StorageRecord>,
+    ) -> Result<Vec<StorageRecord>, DatabaseError> {
+        if authorization == AuthorizationScope::Collection {
+            return Ok(records);
+        }
+
+        let mut filtered = Vec::with_capacity(records.len());
+        for record in records {
+            if self.is_document_authorized(context, collection, PermissionEnum::Read, &record)? {
+                filtered.push(record);
+            }
+        }
+
+        Ok(filtered)
+    }
+
+    fn authorize_document(
+        &self,
+        context: &Context,
+        _collection: &'static CollectionSchema,
+        action: PermissionEnum,
+        record: &StorageRecord,
+    ) -> Result<(), DatabaseError> {
+        let authorization_context = self.authorization_context(context);
+        let permissions = self.document_permission_roles(record, action)?;
+        Authorization::new(action, &authorization_context)
+            .validate(&permissions)
+            .map_err(DatabaseError::from)
+    }
+
+    fn is_document_authorized(
+        &self,
+        context: &Context,
+        collection: &'static CollectionSchema,
+        action: PermissionEnum,
+        record: &StorageRecord,
+    ) -> Result<bool, DatabaseError> {
+        match self.authorize_document(context, collection, action, record) {
+            Ok(()) => Ok(true),
+            Err(DatabaseError::Authorization(_)) => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn document_permission_roles(
+        &self,
+        record: &StorageRecord,
+        action: PermissionEnum,
+    ) -> Result<Vec<Role>, DatabaseError> {
+        let permissions = match record.get(crate::FIELD_PERMISSIONS) {
+            Some(StorageValue::StringArray(values)) => values,
+            Some(StorageValue::Null) | None => return Ok(Vec::new()),
+            Some(_) => {
+                return Err(DatabaseError::Other(
+                    "document permissions field must be a string array".into(),
+                ));
+            }
+        };
+
+        self.permission_roles(permissions.iter().map(String::as_str), action)
+    }
+
+    fn build_cache_key(&self, collection: &str, id: &str) -> CacheKey {
+        CacheKey::new(format!(
+            "{}__{}",
+            Self::cache_key_component(collection),
+            Self::cache_key_component(id)
+        ))
+        .expect("cache key components should always encode to a valid cache key")
+    }
+
+    fn cache_key_component(value: &str) -> String {
+        let mut encoded = String::with_capacity(value.len() * 2 + 1);
+        encoded.push('h');
+        for byte in value.bytes() {
+            encoded.push_str(&format!("{byte:02x}"));
+        }
+        encoded
+    }
+
+    async fn read_cache(
+        &self,
+        cache: &dyn CacheBackend,
+        key: &CacheKey,
+    ) -> Result<Option<CachedDocument>, DatabaseError> {
+        use database_cache::Namespace;
+        let namespace = Namespace::new("docs").expect("valid namespace");
+
+        match cache.get(&namespace, key).await {
+            Ok(Some(bytes)) => {
+                let cached: CachedDocument =
+                    bincode::serde::decode_from_slice(bytes.as_ref(), bincode::config::standard())
+                        .map_err(|e| DatabaseError::Other(format!("cache decode error: {}", e)))?
+                        .0;
+                Ok(Some(cached))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(DatabaseError::Other(format!("cache read error: {}", e))),
+        }
+    }
+
+    async fn write_cache<M>(
+        &self,
+        cache: &dyn CacheBackend,
+        key: &CacheKey,
+        record: &StorageRecord,
+        entity: &M::Entity,
+    ) -> Result<(), DatabaseError>
+    where
+        M: Model,
+        M::Entity: serde::Serialize,
+    {
+        use database_cache::Namespace;
+        let namespace = Namespace::new("docs").expect("valid namespace");
+
+        let permissions = record
+            .get(crate::FIELD_PERMISSIONS)
+            .and_then(|v| match v {
+                StorageValue::StringArray(arr) => Some(arr.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        let cached = CachedDocument {
+            entity_bytes: bincode::serde::encode_to_vec(entity, bincode::config::standard())
+                .map_err(|e| DatabaseError::Other(format!("cache encode error: {}", e)))?,
+            permissions,
+        };
+
+        let bytes = bincode::serde::encode_to_vec(&cached, bincode::config::standard())
+            .map_err(|e| DatabaseError::Other(format!("cache encode error: {}", e)))?;
+
+        let write = CacheWrite {
+            key: key.clone(),
+            value: bytes.into(),
+            ttl: Some(Duration::from_secs(3600)),
+        };
+
+        cache
+            .set(&namespace, write)
+            .await
+            .map_err(|e| DatabaseError::Other(format!("cache write error: {}", e)))?;
+
+        Ok(())
+    }
+
+    async fn invalidate_cache(
+        &self,
+        cache: &dyn CacheBackend,
+        collection: &str,
+        id: &str,
+    ) -> Result<(), DatabaseError> {
+        use database_cache::Namespace;
+        let namespace = Namespace::new("docs").expect("valid namespace");
+        let key = self.build_cache_key(collection, id);
+
+        cache
+            .delete(&namespace, &key)
+            .await
+            .map_err(|e| DatabaseError::Other(format!("cache delete error: {}", e)))?;
+
+        Ok(())
+    }
+
+    fn decode_cached_entity<M>(
+        &self,
+        cached: &CachedDocument,
+        _context: &Context,
+    ) -> Result<M::Entity, DatabaseError>
+    where
+        M: Model,
+        M::Entity: serde::de::DeserializeOwned,
+    {
+        let entity: M::Entity =
+            bincode::serde::decode_from_slice(&cached.entity_bytes, bincode::config::standard())
+                .map_err(|e| DatabaseError::Other(format!("cached entity decode error: {}", e)))?
+                .0;
+        Ok(entity)
+    }
+
+    fn is_cached_document_authorized(
+        &self,
+        context: &Context,
+        cached: &CachedDocument,
+        action: PermissionEnum,
+    ) -> Result<bool, DatabaseError> {
+        let authorization_context = self.authorization_context(context);
+        let roles = self.permission_roles(cached.permissions.iter().map(|s| s.as_str()), action)?;
+
+        match Authorization::new(action, &authorization_context).validate(&roles) {
+            Ok(()) => Ok(true),
+            Err(_) => Ok(false),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+struct CachedDocument {
+    entity_bytes: Vec<u8>,
+    permissions: Vec<String>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::Database;
     use crate::enums::AttributeKind;
+    use crate::errors::DatabaseError;
     use crate::events::{Event, EventBus};
     use crate::key::Key;
     use crate::model::Model;
+    use crate::query::{Field, FilterOp, QuerySpec, SortDirection};
     use crate::registry::StaticRegistry;
     use crate::schema::{AttributePersistence, AttributeSchema, CollectionSchema};
     use crate::traits::storage::{AdapterFuture, StorageAdapter, StorageRecord, StorageValue};
-    use crate::errors::DatabaseError;
+    use crate::utils::Role;
+    use database_cache::{CacheBackend, CacheKey};
     use std::collections::BTreeMap;
     use std::future::Future;
     use std::pin::Pin;
     use std::sync::{Arc, Mutex};
     use std::task::{Context as TaskContext, Poll, RawWaker, RawWakerVTable, Waker};
 
-    const ATTRIBUTES: &[AttributeSchema] = &[
-        AttributeSchema {
-            id: "id",
-            column: "id",
-            kind: AttributeKind::String,
-            required: true,
-            array: false,
-            persistence: AttributePersistence::Persisted,
-            filters: &[],
-            relationship: None,
-        },
-        AttributeSchema {
-            id: "name",
-            column: "name",
-            kind: AttributeKind::String,
-            required: true,
-            array: false,
-            persistence: AttributePersistence::Persisted,
-            filters: &[],
-            relationship: None,
-        },
-    ];
+    const ATTRIBUTES: &[AttributeSchema] = &[AttributeSchema {
+        id: "name",
+        column: "name",
+        kind: AttributeKind::String,
+        required: true,
+        array: false,
+        persistence: AttributePersistence::Persisted,
+        filters: &[],
+        relationship: None,
+    }];
 
     static USERS: CollectionSchema = CollectionSchema {
         id: "users",
         name: "Users",
         document_security: true,
         enabled: true,
-        permissions: &["read(\"any\")"],
+        permissions: &[
+            "read(\"any\")",
+            "create(\"any\")",
+            "update(\"any\")",
+            "delete(\"any\")",
+        ],
+        attributes: ATTRIBUTES,
+        indexes: &[],
+    };
+
+    static RESTRICTED_USERS: CollectionSchema = CollectionSchema {
+        id: "restricted_users",
+        name: "RestrictedUsers",
+        document_security: true,
+        enabled: true,
+        permissions: &[
+            "read(\"user:admin\")",
+            "create(\"user:admin\")",
+            "update(\"user:admin\")",
+            "delete(\"user:admin\")",
+        ],
+        attributes: ATTRIBUTES,
+        indexes: &[],
+    };
+
+    static INVALID_COLLECTION_PERMISSIONS: CollectionSchema = CollectionSchema {
+        id: "invalid_collection_permissions",
+        name: "InvalidCollectionPermissions",
+        document_security: true,
+        enabled: true,
+        permissions: &["read"],
         attributes: ATTRIBUTES,
         indexes: &[],
     };
@@ -222,7 +948,7 @@ mod tests {
                     _ => {
                         return Err(DatabaseError::Other(
                             "record is missing string id field".into(),
-                        ))
+                        ));
                     }
                 };
 
@@ -293,6 +1019,83 @@ mod tests {
 
             Box::pin(async move { Ok(rows.lock().expect("rows lock").remove(&key).is_some()) })
         }
+
+        fn find(
+            &self,
+            context: &crate::Context,
+            schema: &'static CollectionSchema,
+            query: &QuerySpec,
+        ) -> AdapterFuture<'_, Result<Vec<StorageRecord>, DatabaseError>> {
+            let rows = self.rows.clone();
+            let schema_name = context.schema().to_string();
+            let collection = schema.id.to_string();
+            let query = query.clone();
+
+            Box::pin(async move {
+                let mut records: Vec<_> = rows
+                    .lock()
+                    .expect("rows lock")
+                    .iter()
+                    .filter(|((row_schema, row_collection, _), _)| {
+                        row_schema == &schema_name && row_collection == &collection
+                    })
+                    .map(|(_, record)| record.clone())
+                    .collect();
+
+                records.retain(|record| {
+                    query
+                        .filters()
+                        .iter()
+                        .all(|filter| matches_filter(record, filter))
+                });
+
+                for sort in query.sorts().iter().rev() {
+                    records.sort_by(|left, right| {
+                        compare_records(left, right, &sort.field, sort.direction)
+                    });
+                }
+
+                let offset = query.offset_value().unwrap_or(0);
+                let limited = records.into_iter().skip(offset);
+                let result = if let Some(limit) = query.limit_value() {
+                    limited.take(limit).collect()
+                } else {
+                    limited.collect()
+                };
+
+                Ok(result)
+            })
+        }
+
+        fn count(
+            &self,
+            context: &crate::Context,
+            schema: &'static CollectionSchema,
+            query: &QuerySpec,
+        ) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
+            let rows = self.rows.clone();
+            let schema_name = context.schema().to_string();
+            let collection = schema.id.to_string();
+            let query = query.clone();
+
+            Box::pin(async move {
+                let count = rows
+                    .lock()
+                    .expect("rows lock")
+                    .iter()
+                    .filter(|((row_schema, row_collection, _), record)| {
+                        row_schema == &schema_name
+                            && row_collection == &collection
+                            && query
+                                .filters()
+                                .iter()
+                                .all(|filter| matches_filter(record, filter))
+                    })
+                    .count();
+
+                Ok(count as u64)
+            })
+        }
     }
 
     #[derive(Clone, Default)]
@@ -334,7 +1137,7 @@ mod tests {
         }
     }
 
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
     struct UserEntity {
         id: Key<32>,
         name: String,
@@ -355,6 +1158,8 @@ mod tests {
     struct User;
 
     const USER: User = User;
+    const USER_ID_FIELD: Field<User, Key<32>> = Field::new(crate::FIELD_ID);
+    const USER_NAME_FIELD: Field<User, String> = Field::new("name");
 
     impl Model for User {
         type Id = Key<32>;
@@ -375,7 +1180,10 @@ mod tests {
             _context: &crate::Context,
         ) -> Result<StorageRecord, DatabaseError> {
             Ok(BTreeMap::from([
-                ("id".into(), StorageValue::String(input.id.to_string())),
+                (
+                    crate::FIELD_ID.into(),
+                    StorageValue::String(input.id.to_string()),
+                ),
                 ("name".into(), StorageValue::String(input.name)),
             ]))
         }
@@ -396,6 +1204,10 @@ mod tests {
         ) -> Result<Self::Entity, DatabaseError> {
             let id = match record.remove("id") {
                 Some(StorageValue::String(value)) => Key::<32>::new(value)?,
+                None => match record.remove(crate::FIELD_ID) {
+                    Some(StorageValue::String(value)) => Key::<32>::new(value)?,
+                    _ => return Err(DatabaseError::Other("missing id".into())),
+                },
                 _ => return Err(DatabaseError::Other("missing id".into())),
             };
 
@@ -406,6 +1218,107 @@ mod tests {
 
             Ok(UserEntity { id, name })
         }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct RestrictedUser;
+
+    impl Model for RestrictedUser {
+        type Id = Key<32>;
+        type Entity = UserEntity;
+        type Create = CreateUser;
+        type Update = UpdateUser;
+
+        fn schema() -> &'static CollectionSchema {
+            &RESTRICTED_USERS
+        }
+
+        fn entity_to_id(entity: &Self::Entity) -> &Self::Id {
+            &entity.id
+        }
+
+        fn create_to_record(
+            input: Self::Create,
+            context: &crate::Context,
+        ) -> Result<StorageRecord, DatabaseError> {
+            User::create_to_record(input, context)
+        }
+
+        fn update_to_record(
+            input: Self::Update,
+            context: &crate::Context,
+        ) -> Result<StorageRecord, DatabaseError> {
+            User::update_to_record(input, context)
+        }
+
+        fn entity_from_record(
+            record: StorageRecord,
+            context: &crate::Context,
+        ) -> Result<Self::Entity, DatabaseError> {
+            User::entity_from_record(record, context)
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    struct InvalidCollectionPermissionsUser;
+
+    impl Model for InvalidCollectionPermissionsUser {
+        type Id = Key<32>;
+        type Entity = UserEntity;
+        type Create = CreateUser;
+        type Update = UpdateUser;
+
+        fn schema() -> &'static CollectionSchema {
+            &INVALID_COLLECTION_PERMISSIONS
+        }
+
+        fn entity_to_id(entity: &Self::Entity) -> &Self::Id {
+            &entity.id
+        }
+
+        fn create_to_record(
+            input: Self::Create,
+            context: &crate::Context,
+        ) -> Result<StorageRecord, DatabaseError> {
+            User::create_to_record(input, context)
+        }
+
+        fn update_to_record(
+            input: Self::Update,
+            context: &crate::Context,
+        ) -> Result<StorageRecord, DatabaseError> {
+            User::update_to_record(input, context)
+        }
+
+        fn entity_from_record(
+            record: StorageRecord,
+            context: &crate::Context,
+        ) -> Result<Self::Entity, DatabaseError> {
+            User::entity_from_record(record, context)
+        }
+    }
+
+    #[test]
+    fn validates_storage_records_with_system_fields() {
+        let registry = StaticRegistry::new()
+            .register(&USERS)
+            .expect("registry should accept collection");
+        let database = Database::new(FakeAdapter::default(), registry);
+        let collection = database.collection("users").expect("registered collection");
+        let record = BTreeMap::from([
+            (crate::FIELD_ID.into(), StorageValue::String("usr_1".into())),
+            (
+                crate::FIELD_PERMISSIONS.into(),
+                StorageValue::StringArray(vec![]),
+            ),
+            ("name".into(), StorageValue::String("Ravi".into())),
+        ]);
+
+        assert!(
+            database
+                .validate_storage_record(collection, &record)
+                .is_ok()
+        );
     }
 
     #[test]
@@ -447,8 +1360,783 @@ mod tests {
 
         let default_repo = database.repo::<User>();
         let missing = block_on(default_repo.get(&created.id)).expect("get should succeed");
-        assert!(missing.is_none(), "default context should not see tenant_alpha data");
+        assert!(
+            missing.is_none(),
+            "default context should not see tenant_alpha data"
+        );
         assert_eq!(default_repo.context().schema(), "public");
         assert_eq!(repo.context().schema(), context.schema());
+    }
+
+    #[test]
+    fn insert_pipeline_applies_encode_decode_and_events() {
+        #[derive(Debug, Clone, Copy)]
+        struct EncodedUser;
+
+        impl Model for EncodedUser {
+            type Id = Key<32>;
+            type Entity = UserEntity;
+            type Create = CreateUser;
+            type Update = UpdateUser;
+
+            fn schema() -> &'static CollectionSchema {
+                &USERS
+            }
+
+            fn entity_to_id(entity: &Self::Entity) -> &Self::Id {
+                &entity.id
+            }
+
+            fn create_to_record(
+                input: Self::Create,
+                context: &crate::Context,
+            ) -> Result<StorageRecord, DatabaseError> {
+                User::create_to_record(input, context)
+            }
+
+            fn encode_record(
+                mut record: StorageRecord,
+                _context: &crate::Context,
+            ) -> Result<StorageRecord, DatabaseError> {
+                match record.remove("name") {
+                    Some(StorageValue::String(value)) => {
+                        record.insert("name".into(), StorageValue::String(format!("enc:{value}")));
+                        Ok(record)
+                    }
+                    _ => Err(DatabaseError::Other("missing name".into())),
+                }
+            }
+
+            fn decode_record(
+                mut record: StorageRecord,
+                _context: &crate::Context,
+            ) -> Result<StorageRecord, DatabaseError> {
+                match record.remove("name") {
+                    Some(StorageValue::String(value)) => {
+                        let decoded = value.strip_prefix("enc:").unwrap_or(&value).to_string();
+                        record.insert("name".into(), StorageValue::String(decoded));
+                        Ok(record)
+                    }
+                    _ => Err(DatabaseError::Other("missing name".into())),
+                }
+            }
+
+            fn resolve_entity<'a>(
+                mut entity: Self::Entity,
+                _context: &'a crate::Context,
+            ) -> crate::model::ModelFuture<'a, Result<Self::Entity, DatabaseError>> {
+                Box::pin(async move {
+                    entity.name.push_str(" (resolved)");
+                    Ok(entity)
+                })
+            }
+
+            fn update_to_record(
+                input: Self::Update,
+                context: &crate::Context,
+            ) -> Result<StorageRecord, DatabaseError> {
+                User::update_to_record(input, context)
+            }
+
+            fn entity_from_record(
+                record: StorageRecord,
+                context: &crate::Context,
+            ) -> Result<Self::Entity, DatabaseError> {
+                User::entity_from_record(record, context)
+            }
+        }
+
+        let adapter = FakeAdapter::default();
+        let rows = adapter.rows.clone();
+        let registry = StaticRegistry::new()
+            .register(&USERS)
+            .expect("registry should accept collection");
+        let events = RecordingEvents::default();
+        let database = Database::with_events(adapter, registry, events.clone());
+        let repo = database.repo::<EncodedUser>();
+
+        let created = block_on(repo.insert(CreateUser {
+            id: Key::<32>::new("usr_encoded").expect("valid id"),
+            name: "Ravi".into(),
+        }))
+        .expect("insert should succeed");
+
+        assert_eq!(created.id.as_str(), "usr_encoded");
+        assert_eq!(created.name, "Ravi (resolved)");
+
+        let stored = rows
+            .lock()
+            .expect("rows lock")
+            .get(&(
+                "public".to_string(),
+                "users".to_string(),
+                "usr_encoded".to_string(),
+            ))
+            .cloned()
+            .expect("stored row should exist");
+        assert_eq!(
+            stored.get("name"),
+            Some(&StorageValue::String("enc:Ravi".into()))
+        );
+
+        let fetched = block_on(repo.get(&created.id))
+            .expect("get should succeed")
+            .expect("entity should exist");
+        assert_eq!(fetched.name, "Ravi (resolved)");
+
+        let recorded = events.events.lock().expect("event lock");
+        assert!(recorded.contains(&Event::document_created("users", "usr_encoded")));
+    }
+
+    #[test]
+    fn update_pipeline_applies_encode_decode_and_events() {
+        #[derive(Debug, Clone, Copy)]
+        struct EncodedUser;
+
+        impl Model for EncodedUser {
+            type Id = Key<32>;
+            type Entity = UserEntity;
+            type Create = CreateUser;
+            type Update = UpdateUser;
+
+            fn schema() -> &'static CollectionSchema {
+                &USERS
+            }
+
+            fn entity_to_id(entity: &Self::Entity) -> &Self::Id {
+                &entity.id
+            }
+
+            fn create_to_record(
+                input: Self::Create,
+                context: &crate::Context,
+            ) -> Result<StorageRecord, DatabaseError> {
+                User::create_to_record(input, context)
+            }
+
+            fn encode_record(
+                mut record: StorageRecord,
+                _context: &crate::Context,
+            ) -> Result<StorageRecord, DatabaseError> {
+                match record.remove("name") {
+                    Some(StorageValue::String(value)) => {
+                        record.insert("name".into(), StorageValue::String(format!("enc:{value}")));
+                        Ok(record)
+                    }
+                    _ => Err(DatabaseError::Other("missing name".into())),
+                }
+            }
+
+            fn decode_record(
+                mut record: StorageRecord,
+                _context: &crate::Context,
+            ) -> Result<StorageRecord, DatabaseError> {
+                match record.remove("name") {
+                    Some(StorageValue::String(value)) => {
+                        let decoded = value.strip_prefix("enc:").unwrap_or(&value).to_string();
+                        record.insert("name".into(), StorageValue::String(decoded));
+                        Ok(record)
+                    }
+                    _ => Err(DatabaseError::Other("missing name".into())),
+                }
+            }
+
+            fn resolve_entity<'a>(
+                mut entity: Self::Entity,
+                _context: &'a crate::Context,
+            ) -> crate::model::ModelFuture<'a, Result<Self::Entity, DatabaseError>> {
+                Box::pin(async move {
+                    entity.name.push_str(" (resolved)");
+                    Ok(entity)
+                })
+            }
+
+            fn update_to_record(
+                input: Self::Update,
+                context: &crate::Context,
+            ) -> Result<StorageRecord, DatabaseError> {
+                User::update_to_record(input, context)
+            }
+
+            fn entity_from_record(
+                record: StorageRecord,
+                context: &crate::Context,
+            ) -> Result<Self::Entity, DatabaseError> {
+                User::entity_from_record(record, context)
+            }
+        }
+
+        let adapter = FakeAdapter::default();
+        let rows = adapter.rows.clone();
+        let registry = StaticRegistry::new()
+            .register(&USERS)
+            .expect("registry should accept collection");
+        let events = RecordingEvents::default();
+        let database = Database::with_events(adapter, registry, events.clone());
+        let repo = database.repo::<EncodedUser>();
+
+        let created = block_on(repo.insert(CreateUser {
+            id: Key::<32>::new("usr_updated").expect("valid id"),
+            name: "Ravi".into(),
+        }))
+        .expect("insert should succeed");
+
+        let updated = block_on(repo.update(
+            &created.id,
+            UpdateUser {
+                name: "Aman".into(),
+            },
+        ))
+        .expect("update should succeed")
+        .expect("entity should exist");
+
+        assert_eq!(updated.id.as_str(), "usr_updated");
+        assert_eq!(updated.name, "Aman (resolved)");
+
+        let stored = rows
+            .lock()
+            .expect("rows lock")
+            .get(&(
+                "public".to_string(),
+                "users".to_string(),
+                "usr_updated".to_string(),
+            ))
+            .cloned()
+            .expect("stored row should exist");
+        assert_eq!(
+            stored.get("name"),
+            Some(&StorageValue::String("enc:Aman".into()))
+        );
+
+        let fetched = block_on(repo.get(&updated.id))
+            .expect("get should succeed")
+            .expect("entity should exist");
+        assert_eq!(fetched.name, "Aman (resolved)");
+
+        let recorded = events.events.lock().expect("event lock");
+        assert!(recorded.contains(&Event::document_updated("users", "usr_updated")));
+    }
+
+    #[test]
+    fn delete_pipeline_dispatches_event_only_when_row_is_deleted() {
+        let registry = StaticRegistry::new()
+            .register(&USERS)
+            .expect("registry should accept collection");
+        let events = RecordingEvents::default();
+        let database = Database::with_events(FakeAdapter::default(), registry, events.clone());
+        let repo = database.repo::<User>();
+
+        let created = block_on(repo.insert(CreateUser {
+            id: Key::<32>::new("usr_deleted").expect("valid id"),
+            name: "Ravi".into(),
+        }))
+        .expect("insert should succeed");
+
+        let deleted = block_on(repo.delete(&created.id)).expect("delete should succeed");
+        assert!(deleted);
+
+        let missing = block_on(repo.get(&created.id)).expect("get should succeed");
+        assert!(missing.is_none());
+
+        let second_delete = block_on(repo.delete(&created.id)).expect("delete should succeed");
+        assert!(!second_delete);
+
+        let recorded = events.events.lock().expect("event lock");
+        let deleted_events = recorded
+            .iter()
+            .filter(|event| **event == Event::document_deleted("users", "usr_deleted"))
+            .count();
+        assert_eq!(deleted_events, 1);
+    }
+
+    #[test]
+    fn get_uses_document_permissions_when_collection_read_is_denied() {
+        let adapter = FakeAdapter::default();
+        adapter.rows.lock().expect("rows lock").insert(
+            (
+                "public".to_string(),
+                "restricted_users".to_string(),
+                "usr_reader".to_string(),
+            ),
+            BTreeMap::from([
+                (
+                    crate::FIELD_ID.into(),
+                    StorageValue::String("usr_reader".into()),
+                ),
+                ("name".into(), StorageValue::String("Reader".into())),
+                (
+                    crate::FIELD_PERMISSIONS.into(),
+                    StorageValue::StringArray(vec!["read(\"user:reader\")".into()]),
+                ),
+            ]),
+        );
+
+        let registry = StaticRegistry::new()
+            .register(&RESTRICTED_USERS)
+            .expect("registry should accept collection");
+        let database = Database::new(adapter, registry);
+        let reader_role = Role::user("reader", None).expect("reader role should parse");
+        let repo = database
+            .scope(crate::Context::default().with_role(reader_role))
+            .repo::<RestrictedUser>();
+
+        let fetched = block_on(repo.get(&Key::<32>::new("usr_reader").expect("valid id")))
+            .expect("get should succeed")
+            .expect("record should be readable");
+        assert_eq!(fetched.name, "Reader");
+
+        let denied = block_on(
+            database
+                .repo::<RestrictedUser>()
+                .get(&Key::<32>::new("usr_reader").expect("valid id")),
+        );
+        assert!(denied.is_err());
+    }
+
+    #[test]
+    fn find_and_count_filter_by_document_permissions_when_needed() {
+        let adapter = FakeAdapter::default();
+        let mut rows = adapter.rows.lock().expect("rows lock");
+        rows.insert(
+            (
+                "public".to_string(),
+                "restricted_users".to_string(),
+                "usr_one".to_string(),
+            ),
+            BTreeMap::from([
+                (
+                    crate::FIELD_ID.into(),
+                    StorageValue::String("usr_one".into()),
+                ),
+                ("name".into(), StorageValue::String("Visible".into())),
+                (
+                    crate::FIELD_PERMISSIONS.into(),
+                    StorageValue::StringArray(vec!["read(\"user:reader\")".into()]),
+                ),
+            ]),
+        );
+        rows.insert(
+            (
+                "public".to_string(),
+                "restricted_users".to_string(),
+                "usr_two".to_string(),
+            ),
+            BTreeMap::from([
+                (
+                    crate::FIELD_ID.into(),
+                    StorageValue::String("usr_two".into()),
+                ),
+                ("name".into(), StorageValue::String("Hidden".into())),
+                (
+                    crate::FIELD_PERMISSIONS.into(),
+                    StorageValue::StringArray(vec!["read(\"user:other\")".into()]),
+                ),
+            ]),
+        );
+        drop(rows);
+
+        let registry = StaticRegistry::new()
+            .register(&RESTRICTED_USERS)
+            .expect("registry should accept collection");
+        let database = Database::new(adapter, registry);
+        let reader_role = Role::user("reader", None).expect("reader role should parse");
+        let repo = database
+            .scope(crate::Context::default().with_role(reader_role))
+            .repo::<RestrictedUser>();
+
+        let records = block_on(repo.find(QuerySpec::new().sort(USER_ID_FIELD.asc())))
+            .expect("find should succeed");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].id.as_str(), "usr_one");
+
+        let count = block_on(repo.count(QuerySpec::new())).expect("count should succeed");
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn update_uses_document_permissions_when_collection_update_is_denied() {
+        let adapter = FakeAdapter::default();
+        adapter.rows.lock().expect("rows lock").insert(
+            (
+                "public".to_string(),
+                "restricted_users".to_string(),
+                "usr_editor".to_string(),
+            ),
+            BTreeMap::from([
+                (
+                    crate::FIELD_ID.into(),
+                    StorageValue::String("usr_editor".into()),
+                ),
+                ("name".into(), StorageValue::String("Before".into())),
+                (
+                    crate::FIELD_PERMISSIONS.into(),
+                    StorageValue::StringArray(vec!["update(\"user:editor\")".into()]),
+                ),
+            ]),
+        );
+
+        let registry = StaticRegistry::new()
+            .register(&RESTRICTED_USERS)
+            .expect("registry should accept collection");
+        let database = Database::new(adapter, registry);
+        let editor_role = Role::user("editor", None).expect("editor role should parse");
+        let repo = database
+            .scope(crate::Context::default().with_role(editor_role))
+            .repo::<RestrictedUser>();
+        let id = Key::<32>::new("usr_editor").expect("valid id");
+
+        let updated = block_on(repo.update(
+            &id,
+            UpdateUser {
+                name: "After".into(),
+            },
+        ))
+        .expect("update should succeed")
+        .expect("record should exist");
+
+        assert_eq!(updated.name, "After");
+
+        let denied = block_on(database.repo::<RestrictedUser>().update(
+            &id,
+            UpdateUser {
+                name: "Denied".into(),
+            },
+        ));
+        assert!(denied.is_err());
+    }
+
+    #[test]
+    fn delete_uses_document_permissions_when_collection_delete_is_denied() {
+        let adapter = FakeAdapter::default();
+        let mut rows = adapter.rows.lock().expect("rows lock");
+        rows.insert(
+            (
+                "public".to_string(),
+                "restricted_users".to_string(),
+                "usr_delete".to_string(),
+            ),
+            BTreeMap::from([
+                (
+                    crate::FIELD_ID.into(),
+                    StorageValue::String("usr_delete".into()),
+                ),
+                ("name".into(), StorageValue::String("Delete Me".into())),
+                (
+                    crate::FIELD_PERMISSIONS.into(),
+                    StorageValue::StringArray(vec!["delete(\"user:editor\")".into()]),
+                ),
+            ]),
+        );
+        rows.insert(
+            (
+                "public".to_string(),
+                "restricted_users".to_string(),
+                "usr_denied_delete".to_string(),
+            ),
+            BTreeMap::from([
+                (
+                    crate::FIELD_ID.into(),
+                    StorageValue::String("usr_denied_delete".into()),
+                ),
+                ("name".into(), StorageValue::String("Keep Me".into())),
+                (
+                    crate::FIELD_PERMISSIONS.into(),
+                    StorageValue::StringArray(vec!["delete(\"user:other\")".into()]),
+                ),
+            ]),
+        );
+        drop(rows);
+
+        let registry = StaticRegistry::new()
+            .register(&RESTRICTED_USERS)
+            .expect("registry should accept collection");
+        let database = Database::new(adapter, registry);
+        let editor_role = Role::user("editor", None).expect("editor role should parse");
+        let repo = database
+            .scope(crate::Context::default().with_role(editor_role))
+            .repo::<RestrictedUser>();
+        let id = Key::<32>::new("usr_delete").expect("valid id");
+
+        let deleted = block_on(repo.delete(&id)).expect("delete should succeed");
+        assert!(deleted);
+
+        let denied = block_on(repo.delete(&Key::<32>::new("usr_denied_delete").expect("valid id")));
+        assert!(denied.is_err());
+    }
+
+    #[test]
+    fn collection_permission_parse_errors_do_not_fall_back_to_document_scope() {
+        let adapter = FakeAdapter::default();
+        adapter.rows.lock().expect("rows lock").insert(
+            (
+                "public".to_string(),
+                "invalid_collection_permissions".to_string(),
+                "usr_invalid_scope".to_string(),
+            ),
+            BTreeMap::from([
+                (
+                    crate::FIELD_ID.into(),
+                    StorageValue::String("usr_invalid_scope".into()),
+                ),
+                ("name".into(), StorageValue::String("Reader".into())),
+                (
+                    crate::FIELD_PERMISSIONS.into(),
+                    StorageValue::StringArray(vec!["read(\"user:reader\")".into()]),
+                ),
+            ]),
+        );
+
+        let registry = StaticRegistry::new()
+            .register(&INVALID_COLLECTION_PERMISSIONS)
+            .expect("registry should accept collection");
+        let database = Database::new(adapter, registry);
+        let reader_role = Role::user("reader", None).expect("reader role should parse");
+        let repo = database
+            .scope(crate::Context::default().with_role(reader_role))
+            .repo::<InvalidCollectionPermissionsUser>();
+        let id = Key::<32>::new("usr_invalid_scope").expect("valid id");
+
+        let error =
+            block_on(repo.get(&id)).expect_err("invalid collection permissions should fail");
+        assert!(
+            matches!(error, DatabaseError::Other(message) if message.contains("invalid permission"))
+        );
+    }
+
+    #[test]
+    fn cached_get_preserves_document_authorization_failures() {
+        let adapter = FakeAdapter::default();
+        adapter.rows.lock().expect("rows lock").insert(
+            (
+                "public".to_string(),
+                "restricted_users".to_string(),
+                "usr_cached_reader".to_string(),
+            ),
+            BTreeMap::from([
+                (
+                    crate::FIELD_ID.into(),
+                    StorageValue::String("usr_cached_reader".into()),
+                ),
+                ("name".into(), StorageValue::String("Reader".into())),
+                (
+                    crate::FIELD_PERMISSIONS.into(),
+                    StorageValue::StringArray(vec!["read(\"user:reader\")".into()]),
+                ),
+            ]),
+        );
+
+        let registry = StaticRegistry::new()
+            .register(&RESTRICTED_USERS)
+            .expect("registry should accept collection");
+        let cache = Arc::new(database_cache::MemoryCacheBackend::new());
+        let database = Database::new(adapter, registry).with_cache(cache);
+        let reader_role = Role::user("reader", None).expect("reader role should parse");
+        let reader_repo = database
+            .scope(crate::Context::default().with_role(reader_role))
+            .repo::<RestrictedUser>();
+        let id = Key::<32>::new("usr_cached_reader").expect("valid id");
+
+        let fetched = block_on(reader_repo.get(&id))
+            .expect("authorized get should succeed")
+            .expect("record should exist");
+        assert_eq!(fetched.name, "Reader");
+
+        let denied = block_on(database.repo::<RestrictedUser>().get(&id));
+        assert!(
+            denied.is_err(),
+            "cached reads should still respect auth failures"
+        );
+    }
+
+    #[test]
+    fn cache_is_populated_and_invalidated_across_crud_flow() {
+        let registry = StaticRegistry::new()
+            .register(&USERS)
+            .expect("registry should accept collection");
+        let cache = Arc::new(database_cache::MemoryCacheBackend::new());
+        let database = Database::new(FakeAdapter::default(), registry).with_cache(cache.clone());
+        let repo = database.repo::<User>();
+        let id = Key::<32>::new("usr_cached_flow").expect("valid id");
+        let cache_key =
+            CacheKey::new("h7573657273__h7573725f6361636865645f666c6f77").expect("valid key");
+        let namespace = database_cache::Namespace::new("docs").expect("valid namespace");
+
+        let created = block_on(repo.insert(CreateUser {
+            id: id.clone(),
+            name: "Ravi".into(),
+        }))
+        .expect("insert should succeed");
+        assert_eq!(created.name, "Ravi");
+        assert!(block_on(cache.exists(&namespace, &cache_key)).expect("exists should succeed"));
+
+        let updated = block_on(repo.update(
+            &id,
+            UpdateUser {
+                name: "Aman".into(),
+            },
+        ))
+        .expect("update should succeed")
+        .expect("row should exist");
+        assert_eq!(updated.name, "Aman");
+        assert!(
+            !block_on(cache.exists(&namespace, &cache_key)).expect("exists should succeed"),
+            "update should invalidate the stale cache entry"
+        );
+
+        let fetched = block_on(repo.get(&id))
+            .expect("get should succeed")
+            .expect("row should exist");
+        assert_eq!(fetched.name, "Aman");
+        assert!(block_on(cache.exists(&namespace, &cache_key)).expect("exists should succeed"));
+
+        let deleted = block_on(repo.delete(&id)).expect("delete should succeed");
+        assert!(deleted);
+        assert!(
+            !block_on(cache.exists(&namespace, &cache_key)).expect("exists should succeed"),
+            "delete should invalidate the cache entry"
+        );
+    }
+
+    #[test]
+    fn finds_and_counts_with_typed_query_fields() {
+        let registry = StaticRegistry::new()
+            .register(&USERS)
+            .expect("registry should accept collection");
+        let database = Database::new(FakeAdapter::default(), registry);
+        let repo = database.repo::<User>();
+
+        for (id, name) in [("usr_1", "Ravi"), ("usr_2", "Aman"), ("usr_3", "Ravi")] {
+            block_on(repo.insert(CreateUser {
+                id: Key::<32>::new(id).expect("valid id"),
+                name: name.to_string(),
+            }))
+            .expect("insert should succeed");
+        }
+
+        let ravis = block_on(
+            repo.find(
+                QuerySpec::new()
+                    .filter(USER_NAME_FIELD.eq("Ravi"))
+                    .sort(USER_ID_FIELD.desc()),
+            ),
+        )
+        .expect("find should succeed");
+
+        assert_eq!(ravis.len(), 2);
+        assert_eq!(ravis[0].id.as_str(), "usr_3");
+        assert_eq!(ravis[1].id.as_str(), "usr_1");
+
+        let first_ravi = block_on(
+            repo.find_one(
+                QuerySpec::new()
+                    .filter(USER_NAME_FIELD.eq("Ravi"))
+                    .sort(USER_ID_FIELD.asc()),
+            ),
+        )
+        .expect("find_one should succeed")
+        .expect("record should exist");
+        assert_eq!(first_ravi.id.as_str(), "usr_1");
+
+        let count = block_on(repo.count(QuerySpec::new().filter(USER_NAME_FIELD.eq("Ravi"))))
+            .expect("count should succeed");
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn enforces_collection_permissions_in_repository_api() {
+        let registry = StaticRegistry::new()
+            .register(&USERS)
+            .and_then(|registry| registry.register(&RESTRICTED_USERS))
+            .expect("registry should accept collections");
+        let database = Database::new(FakeAdapter::default(), registry);
+
+        let denied_repo = database.repo::<RestrictedUser>();
+        let denied_create = block_on(denied_repo.insert(CreateUser {
+            id: Key::<32>::new("usr_denied").expect("valid id"),
+            name: "Denied".into(),
+        }));
+        assert!(denied_create.is_err());
+
+        let admin_role = Role::user("admin", None).expect("admin role should parse");
+        let allowed_repo = database
+            .scope(crate::Context::default().with_role(admin_role))
+            .repo::<RestrictedUser>();
+
+        let created = block_on(allowed_repo.insert(CreateUser {
+            id: Key::<32>::new("usr_admin").expect("valid id"),
+            name: "Admin".into(),
+        }))
+        .expect("admin insert should succeed");
+
+        let fetched = block_on(allowed_repo.get(&created.id))
+            .expect("admin get should succeed")
+            .expect("admin record should exist");
+        assert_eq!(fetched.name, "Admin");
+
+        let denied_read = block_on(database.repo::<RestrictedUser>().find(QuerySpec::new()))
+            .expect("find should succeed");
+        assert!(denied_read.is_empty());
+    }
+
+    fn matches_filter(record: &StorageRecord, filter: &crate::query::Filter) -> bool {
+        let value = record.get(&filter.field);
+
+        match &filter.op {
+            FilterOp::Eq(expected) => value == Some(expected),
+            FilterOp::NotEq(expected) => value != Some(expected),
+            FilterOp::In(values) => value
+                .map(|current| values.contains(current))
+                .unwrap_or(false),
+            FilterOp::Gt(expected) => compare_value(value, Some(expected)).is_gt(),
+            FilterOp::Gte(expected) => {
+                let ordering = compare_value(value, Some(expected));
+                ordering.is_gt() || ordering.is_eq()
+            }
+            FilterOp::Lt(expected) => compare_value(value, Some(expected)).is_lt(),
+            FilterOp::Lte(expected) => {
+                let ordering = compare_value(value, Some(expected));
+                ordering.is_lt() || ordering.is_eq()
+            }
+            FilterOp::IsNull => matches!(value, None | Some(StorageValue::Null)),
+            FilterOp::IsNotNull => !matches!(value, None | Some(StorageValue::Null)),
+        }
+    }
+
+    fn compare_records(
+        left: &StorageRecord,
+        right: &StorageRecord,
+        field: &str,
+        direction: SortDirection,
+    ) -> std::cmp::Ordering {
+        let ordering = compare_value(left.get(field), right.get(field));
+        match direction {
+            SortDirection::Asc => ordering,
+            SortDirection::Desc => ordering.reverse(),
+        }
+    }
+
+    fn compare_value(
+        left: Option<&StorageValue>,
+        right: Option<&StorageValue>,
+    ) -> std::cmp::Ordering {
+        match (left, right) {
+            (Some(StorageValue::String(left)), Some(StorageValue::String(right))) => {
+                left.cmp(right)
+            }
+            (Some(StorageValue::Int(left)), Some(StorageValue::Int(right))) => left.cmp(right),
+            (Some(StorageValue::Float(left)), Some(StorageValue::Float(right))) => {
+                left.partial_cmp(right).unwrap_or(std::cmp::Ordering::Equal)
+            }
+            (Some(StorageValue::Bool(left)), Some(StorageValue::Bool(right))) => left.cmp(right),
+            (Some(StorageValue::Timestamp(left)), Some(StorageValue::Timestamp(right))) => {
+                left.cmp(right)
+            }
+            (Some(StorageValue::Null), Some(StorageValue::Null)) | (None, None) => {
+                std::cmp::Ordering::Equal
+            }
+            (None, Some(_)) | (Some(StorageValue::Null), Some(_)) => std::cmp::Ordering::Less,
+            (Some(_), None) | (Some(_), Some(StorageValue::Null)) => std::cmp::Ordering::Greater,
+            _ => std::cmp::Ordering::Equal,
+        }
     }
 }

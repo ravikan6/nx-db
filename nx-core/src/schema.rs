@@ -105,9 +105,16 @@ impl CollectionSchema {
             }
 
             for attribute_id in index.attributes {
-                if self.attribute(attribute_id).is_none() {
+                let Some(attribute) = self.attribute(attribute_id) else {
                     return Err(DatabaseError::Other(format!(
                         "index '{}.{}' references unknown attribute '{}'",
+                        self.id, index.id, attribute_id
+                    )));
+                };
+
+                if attribute.persistence != AttributePersistence::Persisted {
+                    return Err(DatabaseError::Other(format!(
+                        "index '{}.{}' cannot reference virtual attribute '{}'",
                         self.id, index.id, attribute_id
                     )));
                 }

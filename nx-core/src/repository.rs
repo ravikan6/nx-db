@@ -3,6 +3,7 @@ use crate::database::Database;
 use crate::errors::DatabaseError;
 use crate::events::EventBus;
 use crate::model::Model;
+use crate::query::QuerySpec;
 use crate::registry::CollectionRegistry;
 use crate::schema::CollectionSchema;
 use crate::traits::storage::StorageAdapter;
@@ -77,6 +78,7 @@ where
     R: CollectionRegistry,
     E: EventBus,
     M: Model,
+    M::Entity: serde::Serialize + serde::de::DeserializeOwned,
 {
     pub fn schema(&self) -> Result<&'static CollectionSchema, DatabaseError> {
         self.database.collection(M::schema().id)
@@ -90,31 +92,11 @@ where
     }
 
     pub async fn insert(&self, input: M::Create) -> Result<M::Entity, DatabaseError> {
-        let collection = self.schema()?;
-        let record = M::create_to_record(input, &self.context)?;
-
-        self.database.validate_storage_record(collection, &record)?;
-
-        let stored = self
-            .database
-            .adapter()
-            .insert(&self.context, collection, record)
-            .await?;
-
-        M::entity_from_record(stored, &self.context)
+        self.database.insert_model::<M>(&self.context, input).await
     }
 
     pub async fn get(&self, id: &M::Id) -> Result<Option<M::Entity>, DatabaseError> {
-        let collection = self.schema()?;
-        let record = self
-            .database
-            .adapter()
-            .get(&self.context, collection, M::id_to_string(id))
-            .await?;
-
-        record
-            .map(|value| M::entity_from_record(value, &self.context))
-            .transpose()
+        self.database.get_model::<M>(&self.context, id).await
     }
 
     pub async fn update(
@@ -122,27 +104,25 @@ where
         id: &M::Id,
         input: M::Update,
     ) -> Result<Option<M::Entity>, DatabaseError> {
-        let collection = self.schema()?;
-        let record = M::update_to_record(input, &self.context)?;
-
-        self.database.validate_storage_record(collection, &record)?;
-
-        let stored = self
-            .database
-            .adapter()
-            .update(&self.context, collection, M::id_to_string(id), record)
-            .await?;
-
-        stored
-            .map(|value| M::entity_from_record(value, &self.context))
-            .transpose()
+        self.database
+            .update_model::<M>(&self.context, id, input)
+            .await
     }
 
     pub async fn delete(&self, id: &M::Id) -> Result<bool, DatabaseError> {
-        let collection = self.schema()?;
-        self.database
-            .adapter()
-            .delete(&self.context, collection, M::id_to_string(id))
-            .await
+        self.database.delete_model::<M>(&self.context, id).await
+    }
+
+    pub async fn find(&self, query: QuerySpec) -> Result<Vec<M::Entity>, DatabaseError> {
+        self.database.find_models::<M>(&self.context, &query).await
+    }
+
+    pub async fn find_one(&self, query: QuerySpec) -> Result<Option<M::Entity>, DatabaseError> {
+        let mut records = self.find(query.limit(1)).await?;
+        Ok(records.pop())
+    }
+
+    pub async fn count(&self, query: QuerySpec) -> Result<u64, DatabaseError> {
+        self.database.count_models::<M>(&self.context, &query).await
     }
 }

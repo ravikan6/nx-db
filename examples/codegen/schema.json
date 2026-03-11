@@ -1,0 +1,86 @@
+{
+  "module": "app_models",
+  "collections": [
+    {
+      "id": "users",
+      "name": "Users",
+      "model": "User",
+      "documentSecurity": true,
+      "permissions": [
+        "read(\"any\")",
+        "create(\"any\")",
+        "update(\"any\")",
+        "delete(\"any\")"
+      ],
+      "idMaxLength": 32,
+      "indexes": [
+        {
+          "id": "users_email_unique",
+          "kind": "unique",
+          "attributes": ["email"]
+        },
+        {
+          "id": "users_name_active_idx",
+          "kind": "key",
+          "attributes": ["name", "active"],
+          "orders": ["asc", "desc"]
+        }
+      ],
+      "attributes": [
+        {
+          "id": "name",
+          "kind": "string",
+          "required": true
+        },
+        {
+          "id": "email",
+          "kind": "string"
+        },
+        {
+          "id": "active",
+          "kind": "boolean",
+          "required": true
+        }
+      ]
+    },
+    {
+      "id": "sessions",
+      "name": "Sessions",
+      "model": "Session",
+      "documentSecurity": true,
+      "permissions": [
+        "read(\"users\")",
+        "create(\"users\")",
+        "update(\"users\")",
+        "delete(\"users\")"
+      ],
+      "idMaxLength": 48,
+      "indexes": [
+        {
+          "id": "sessions_user_token_idx",
+          "kind": "key",
+          "attributes": ["userId", "token"],
+          "orders": ["asc", "asc"]
+        }
+      ],
+      "attributes": [
+        {
+          "id": "userId",
+          "column": "user_id",
+          "kind": "relationship",
+          "required": true
+        },
+        {
+          "id": "token",
+          "kind": "string",
+          "required": true
+        },
+        {
+          "id": "revoked",
+          "kind": "boolean",
+          "required": true
+        }
+      ]
+    }
+  ]
+}

@@ -1,6 +1,8 @@
 use crate::context::Context;
 use crate::errors::DatabaseError;
+use crate::query::QuerySpec;
 use crate::schema::CollectionSchema;
+use crate::utils::PermissionEnum;
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -12,17 +14,26 @@ pub type AdapterFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub enum StorageValue {
     Null,
     Bool(bool),
+    BoolArray(Vec<bool>),
     Int(i64),
+    IntArray(Vec<i64>),
     Float(f64),
+    FloatArray(Vec<f64>),
     String(String),
     StringArray(Vec<String>),
     Bytes(Vec<u8>),
     Timestamp(OffsetDateTime),
+    TimestampArray(Vec<OffsetDateTime>),
+    Json(String),
 }
 
 pub type StorageRecord = BTreeMap<String, StorageValue>;
 
 pub trait StorageAdapter: Send + Sync {
+    fn enforces_document_filtering(&self, _action: PermissionEnum) -> bool {
+        false
+    }
+
     fn ping(&self, context: &Context) -> AdapterFuture<'_, Result<(), DatabaseError>>;
 
     fn create_collection(
@@ -59,4 +70,18 @@ pub trait StorageAdapter: Send + Sync {
         schema: &'static CollectionSchema,
         id: &str,
     ) -> AdapterFuture<'_, Result<bool, DatabaseError>>;
+
+    fn find(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        query: &QuerySpec,
+    ) -> AdapterFuture<'_, Result<Vec<StorageRecord>, DatabaseError>>;
+
+    fn count(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        query: &QuerySpec,
+    ) -> AdapterFuture<'_, Result<u64, DatabaseError>>;
 }

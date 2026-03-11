@@ -1,9 +1,20 @@
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
-    CollectionCreated { collection: &'static str },
-    DocumentCreated { collection: &'static str, id: String },
-    DocumentUpdated { collection: &'static str, id: String },
-    DocumentDeleted { collection: &'static str, id: String },
+    CollectionCreated {
+        collection: &'static str,
+    },
+    DocumentCreated {
+        collection: &'static str,
+        id: String,
+    },
+    DocumentUpdated {
+        collection: &'static str,
+        id: String,
+    },
+    DocumentDeleted {
+        collection: &'static str,
+        id: String,
+    },
 }
 
 impl Event {

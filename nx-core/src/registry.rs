@@ -29,7 +29,10 @@ impl StaticRegistry {
         Self::default()
     }
 
-    pub fn register(mut self, collection: &'static CollectionSchema) -> Result<Self, DatabaseError> {
+    pub fn register(
+        mut self,
+        collection: &'static CollectionSchema,
+    ) -> Result<Self, DatabaseError> {
         if self.collections.insert(collection.id, collection).is_some() {
             return Err(DatabaseError::Other(format!(
                 "collection '{}' is already registered",
@@ -62,7 +65,9 @@ impl StaticRegistry {
 
 impl CollectionRegistry for StaticRegistry {
     type Iter<'a>
-        = std::iter::Copied<std::collections::btree_map::Values<'a, &'static str, &'static CollectionSchema>>
+        = std::iter::Copied<
+        std::collections::btree_map::Values<'a, &'static str, &'static CollectionSchema>,
+    >
     where
         Self: 'a;
 
@@ -109,7 +114,10 @@ mod tests {
             .expect("registry should accept collection");
 
         assert_eq!(registry.len(), 1);
-        assert_eq!(registry.get("users").map(|schema| schema.name), Some("Users"));
+        assert_eq!(
+            registry.get("users").map(|schema| schema.name),
+            Some("Users")
+        );
         assert!(registry.validate().is_ok());
     }
 }

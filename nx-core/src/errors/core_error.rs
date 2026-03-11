@@ -1,43 +1,29 @@
-use std::error::Error;
-use std::fmt::{Display, Formatter};
-
 use super::{AuthorizationError, PermissionError, RoleError};
+use thiserror::Error;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum DatabaseError {
-    Role(RoleError),
-    Permission(PermissionError),
-    Authorization(AuthorizationError),
+    #[error("role error: {0}")]
+    Role(#[from] RoleError),
+
+    #[error("permission error: {0}")]
+    Permission(#[from] PermissionError),
+
+    #[error("authorization error: {0}")]
+    Authorization(#[from] AuthorizationError),
+
+    #[error("validation error: {0}")]
+    Validation(String),
+
+    #[error("resource not found: {0}")]
+    NotFound(String),
+
+    #[error("resource conflict: {0}")]
+    Conflict(String),
+
+    #[error("storage error: {0}")]
+    Storage(String),
+
+    #[error("{0}")]
     Other(String),
-}
-
-impl Display for DatabaseError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            DatabaseError::Role(error) => write!(f, "{error}"),
-            DatabaseError::Permission(error) => write!(f, "{error}"),
-            DatabaseError::Authorization(error) => write!(f, "{error}"),
-            DatabaseError::Other(message) => write!(f, "{message}"),
-        }
-    }
-}
-
-impl Error for DatabaseError {}
-
-impl From<RoleError> for DatabaseError {
-    fn from(value: RoleError) -> Self {
-        DatabaseError::Role(value)
-    }
-}
-
-impl From<PermissionError> for DatabaseError {
-    fn from(value: PermissionError) -> Self {
-        DatabaseError::Permission(value)
-    }
-}
-
-impl From<AuthorizationError> for DatabaseError {
-    fn from(value: AuthorizationError) -> Self {
-        DatabaseError::Authorization(value)
-    }
 }

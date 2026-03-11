@@ -1,0 +1,40 @@
+{
+  "module": "filtered_app_models",
+  "filters": [
+    {
+      "name": "displayName",
+      "decodedType": "crate::DisplayName",
+      "encodedType": "String",
+      "encode": "crate::codecs::encode_display_name",
+      "decode": "crate::codecs::decode_display_name"
+    }
+  ],
+  "collections": [
+    {
+      "id": "users",
+      "name": "Users",
+      "model": "User",
+      "documentSecurity": true,
+      "permissions": [
+        "read(\"any\")",
+        "create(\"any\")",
+        "update(\"any\")",
+        "delete(\"any\")"
+      ],
+      "idMaxLength": 32,
+      "attributes": [
+        {
+          "id": "name",
+          "kind": "string",
+          "required": true,
+          "filters": ["displayName"]
+        },
+        {
+          "id": "active",
+          "kind": "boolean",
+          "required": true
+        }
+      ]
+    }
+  ]
+}

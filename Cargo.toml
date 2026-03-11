@@ -2,7 +2,10 @@
 members = [
     ".",
     "nx-core",
-    "driver-postgres"
+    "driver-postgres",
+    "database-cache",
+    "database-codegen",
+    "database-cli"
 ]
 resolver = "2"
 
@@ -16,9 +19,17 @@ edition = "2024"
 
 [dependencies]
 nx_core = { path = "nx-core" }
+database-cache = { path = "database-cache" }
+serde = { version = "1.0.228", features = ["derive"] }
 
 driver-postgres = { path = "driver-postgres", optional = true }
+
+[dev-dependencies]
+serde = { version = "1.0.228", features = ["derive"] }
+sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio-rustls", "time"] }
+tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
 
 [features]
 default = []
 postgres = ["driver-postgres"]
+cache-redis = ["database-cache/redis"]

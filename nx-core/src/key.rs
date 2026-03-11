@@ -3,7 +3,9 @@ use std::borrow::Borrow;
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct Key<const MAX: usize>(Box<str>);
 
 impl<const MAX: usize> Key<MAX> {

@@ -13,7 +13,7 @@ pub struct AuthorizationContext {
 impl AuthorizationContext {
     pub fn new<I, S>(roles: I, status: bool) -> Self
     where
-        I: IntoIterator<Item=S>,
+        I: IntoIterator<Item = S>,
         S: Into<Role>,
     {
         let mut roles: HashSet<Role> = roles.into_iter().map(Into::into).collect();
@@ -23,7 +23,7 @@ impl AuthorizationContext {
 
     pub fn enabled<I, S>(roles: I) -> Self
     where
-        I: IntoIterator<Item=S>,
+        I: IntoIterator<Item = S>,
         S: Into<Role>,
     {
         Self::new(roles, true)
@@ -31,7 +31,7 @@ impl AuthorizationContext {
 
     pub fn disabled<I, S>(roles: I) -> Self
     where
-        I: IntoIterator<Item=S>,
+        I: IntoIterator<Item = S>,
         S: Into<Role>,
     {
         Self::new(roles, false)
