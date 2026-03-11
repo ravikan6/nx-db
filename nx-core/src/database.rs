@@ -526,6 +526,79 @@ where
         }
     }
 
+    pub async fn update_many_models<M>(
+        &self,
+        context: &Context,
+        query: &QuerySpec,
+        input: M::Update,
+    ) -> Result<u64, DatabaseError>
+    where
+        M: Model,
+    {
+        let collection = self.collection(M::schema().id)?;
+        self.validate_query(collection, query)?;
+        let authorization =
+            self.authorization_scope(context, collection, PermissionEnum::Update)?;
+
+        if authorization == AuthorizationScope::Document
+            && !self
+                .adapter
+                .enforces_document_filtering(PermissionEnum::Update)
+        {
+            return Err(DatabaseError::Other("update_many is not supported without adapter-level document filtering".to_string()));
+        }
+
+        let record = M::update_to_record(input, context)?;
+        let encoded = self.prepare_record_for_storage::<M>(context, collection, record, true)?;
+
+        let updated = self
+            .adapter
+            .update_many(context, collection, query, encoded)
+            .await?;
+
+        if updated > 0 {
+            if let Some(cache) = &self.cache {
+                let namespace = database_cache::Namespace::new(collection.id).expect("valid namespace");
+                let _ = cache.clear_namespace(&namespace).await;
+            }
+        }
+
+        Ok(updated)
+    }
+
+    pub async fn delete_many_models<M>(
+        &self,
+        context: &Context,
+        query: &QuerySpec,
+    ) -> Result<u64, DatabaseError>
+    where
+        M: Model,
+    {
+        let collection = self.collection(M::schema().id)?;
+        self.validate_query(collection, query)?;
+        let authorization =
+            self.authorization_scope(context, collection, PermissionEnum::Delete)?;
+
+        if authorization == AuthorizationScope::Document
+            && !self
+                .adapter
+                .enforces_document_filtering(PermissionEnum::Delete)
+        {
+            return Err(DatabaseError::Other("delete_many is not supported without adapter-level document filtering".to_string()));
+        }
+
+        let deleted = self.adapter.delete_many(context, collection, query).await?;
+
+        if deleted > 0 {
+            if let Some(cache) = &self.cache {
+                let namespace = database_cache::Namespace::new(collection.id).expect("valid namespace");
+                let _ = cache.clear_namespace(&namespace).await;
+            }
+        }
+
+        Ok(deleted)
+    }
+
     pub async fn materialize_entity<M>(
         &self,
         context: &Context,
@@ -1018,6 +1091,77 @@ mod tests {
             );
 
             Box::pin(async move { Ok(rows.lock().expect("rows lock").remove(&key).is_some()) })
+        }
+
+        fn update_many(
+            &self,
+            context: &crate::Context,
+            schema: &'static CollectionSchema,
+            query: &QuerySpec,
+            values: StorageRecord,
+        ) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
+            let rows = self.rows.clone();
+            let schema_name = context.schema().to_string();
+            let collection = schema.id.to_string();
+            let query = query.clone();
+
+            Box::pin(async move {
+                let mut locked = rows.lock().expect("rows lock");
+                let mut count = 0;
+                let mut to_update = Vec::new();
+
+                for (key, record) in locked.iter() {
+                    if key.0 == schema_name && key.1 == collection {
+                        if query.filters().iter().all(|filter| matches_filter(record, filter)) {
+                            to_update.push(key.clone());
+                        }
+                    }
+                }
+
+                for key in to_update {
+                    if let Some(record) = locked.get_mut(&key) {
+                        for (field, value) in &values {
+                            record.insert(field.clone(), value.clone());
+                        }
+                        count += 1;
+                    }
+                }
+
+                Ok(count)
+            })
+        }
+
+        fn delete_many(
+            &self,
+            context: &crate::Context,
+            schema: &'static CollectionSchema,
+            query: &QuerySpec,
+        ) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
+            let rows = self.rows.clone();
+            let schema_name = context.schema().to_string();
+            let collection = schema.id.to_string();
+            let query = query.clone();
+
+            Box::pin(async move {
+                let mut locked = rows.lock().expect("rows lock");
+                let mut count = 0;
+                let mut to_delete = Vec::new();
+
+                for (key, record) in locked.iter() {
+                    if key.0 == schema_name && key.1 == collection {
+                        if query.filters().iter().all(|filter| matches_filter(record, filter)) {
+                            to_delete.push(key.clone());
+                        }
+                    }
+                }
+
+                for key in to_delete {
+                    locked.remove(&key);
+                    count += 1;
+                }
+
+                Ok(count)
+            })
         }
 
         fn find(
@@ -2097,6 +2241,22 @@ mod tests {
                 let ordering = compare_value(value, Some(expected));
                 ordering.is_lt() || ordering.is_eq()
             }
+            FilterOp::Contains(expected) => match (value, expected) {
+                (Some(StorageValue::String(s)), StorageValue::String(sub)) => s.contains(sub),
+                _ => false,
+            },
+            FilterOp::StartsWith(expected) => match (value, expected) {
+                (Some(StorageValue::String(s)), StorageValue::String(prefix)) => s.starts_with(prefix),
+                _ => false,
+            },
+            FilterOp::EndsWith(expected) => match (value, expected) {
+                (Some(StorageValue::String(s)), StorageValue::String(suffix)) => s.ends_with(suffix),
+                _ => false,
+            },
+            FilterOp::TextSearch(expected) => match (value, expected) {
+                (Some(StorageValue::String(s)), StorageValue::String(query)) => s.to_lowercase().contains(&query.to_lowercase()),
+                _ => false,
+            },
             FilterOp::IsNull => matches!(value, None | Some(StorageValue::Null)),
             FilterOp::IsNotNull => !matches!(value, None | Some(StorageValue::Null)),
         }

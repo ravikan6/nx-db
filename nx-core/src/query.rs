@@ -13,6 +13,10 @@ pub enum FilterOp {
     Gte(StorageValue),
     Lt(StorageValue),
     Lte(StorageValue),
+    Contains(StorageValue),
+    StartsWith(StorageValue),
+    EndsWith(StorageValue),
+    TextSearch(StorageValue),
     IsNull,
     IsNotNull,
 }
@@ -187,6 +191,46 @@ impl<M, T> Field<M, T> {
         }
     }
 
+    pub fn contains<V>(&self, value: V) -> Filter
+    where
+        V: IntoQueryValue,
+    {
+        Filter {
+            field: self.name.to_string(),
+            op: FilterOp::Contains(value.into_query_value()),
+        }
+    }
+
+    pub fn starts_with<V>(&self, value: V) -> Filter
+    where
+        V: IntoQueryValue,
+    {
+        Filter {
+            field: self.name.to_string(),
+            op: FilterOp::StartsWith(value.into_query_value()),
+        }
+    }
+
+    pub fn ends_with<V>(&self, value: V) -> Filter
+    where
+        V: IntoQueryValue,
+    {
+        Filter {
+            field: self.name.to_string(),
+            op: FilterOp::EndsWith(value.into_query_value()),
+        }
+    }
+
+    pub fn text_search<V>(&self, value: V) -> Filter
+    where
+        V: IntoQueryValue,
+    {
+        Filter {
+            field: self.name.to_string(),
+            op: FilterOp::TextSearch(value.into_query_value()),
+        }
+    }
+
     pub fn is_null(&self) -> Filter {
         Filter {
             field: self.name.to_string(),
@@ -297,6 +341,34 @@ impl<M, T> EncodedField<M, T> {
         Ok(Filter {
             field: self.name.to_string(),
             op: FilterOp::Lte(self.encode_value(value)?),
+        })
+    }
+
+    pub fn contains(&self, value: T) -> Result<Filter, DatabaseError> {
+        Ok(Filter {
+            field: self.name.to_string(),
+            op: FilterOp::Contains(self.encode_value(value)?),
+        })
+    }
+
+    pub fn starts_with(&self, value: T) -> Result<Filter, DatabaseError> {
+        Ok(Filter {
+            field: self.name.to_string(),
+            op: FilterOp::StartsWith(self.encode_value(value)?),
+        })
+    }
+
+    pub fn ends_with(&self, value: T) -> Result<Filter, DatabaseError> {
+        Ok(Filter {
+            field: self.name.to_string(),
+            op: FilterOp::EndsWith(self.encode_value(value)?),
+        })
+    }
+
+    pub fn text_search(&self, value: T) -> Result<Filter, DatabaseError> {
+        Ok(Filter {
+            field: self.name.to_string(),
+            op: FilterOp::TextSearch(self.encode_value(value)?),
         })
     }
 

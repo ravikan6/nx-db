@@ -657,6 +657,31 @@ impl<'a> PostgresAdapter<'a> {
                 builder.push(format!("{column} <= "));
                 Self::push_bind_value(builder, value)?;
             }
+            FilterOp::Contains(value) => {
+                // In Postgres, string containment uses LIKE '%value%' or ILIKE. 
+                // For a robust driver, let's assume we use standard LIKE with wildcard appending
+                // However, since `value` is pushed via `push_bind_value`, we need a way to wrap it.
+                // The easiest way is to cast column to text and use LIKE '%' || $1 || '%'
+                builder.push(format!("{column}::text LIKE '%' || "));
+                Self::push_bind_value(builder, value)?;
+                builder.push(" || '%'");
+            }
+            FilterOp::StartsWith(value) => {
+                builder.push(format!("{column}::text LIKE "));
+                Self::push_bind_value(builder, value)?;
+                builder.push(" || '%'");
+            }
+            FilterOp::EndsWith(value) => {
+                builder.push(format!("{column}::text LIKE '%' || "));
+                Self::push_bind_value(builder, value)?;
+            }
+            FilterOp::TextSearch(value) => {
+                builder.push(format!(
+                    "to_tsvector('simple', COALESCE({column}::text, '')) @@ websearch_to_tsquery('simple', "
+                ));
+                Self::push_bind_value(builder, value)?;
+                builder.push(")");
+            }
             FilterOp::In(values) => {
                 if values.is_empty() {
                     builder.push("FALSE");
@@ -1238,6 +1263,77 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
         })
     }
 
+    fn update_many(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        query: &QuerySpec,
+        values: StorageRecord,
+    ) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
+        let pool = self.pool;
+        let context = context.clone();
+        let query = query.clone();
+
+        Box::pin(async move {
+            Self::validate_context_support(&context)?;
+
+            let table = Self::qualified_table_name(&context, schema.id)?;
+            let permissions_update = values.contains_key(FIELD_PERMISSIONS);
+            let permissions = Self::extract_optional_string_array(&values, FIELD_PERMISSIONS)?;
+            let attributes: Vec<_> = Self::persisted_attributes(schema)
+                .into_iter()
+                .filter(|attribute| values.contains_key(attribute.id))
+                .collect();
+
+            if attributes.is_empty() && !permissions_update {
+                return Ok(0);
+            }
+
+            let mut builder = QueryBuilder::<Postgres>::new(format!("UPDATE {table} AS main SET "));
+            Self::push_update_assignments(
+                &mut builder,
+                schema,
+                &values,
+                permissions_update,
+                &permissions,
+                &attributes,
+            )?;
+            
+            let mut has_conditions = false;
+            Self::push_document_action_condition(
+                &mut builder,
+                &context,
+                schema,
+                "main",
+                PermissionEnum::Update,
+                &mut has_conditions,
+            )?;
+            
+            for filter in query.filters() {
+                Self::push_condition_separator(&mut builder, &mut has_conditions);
+                Self::push_filter(&mut builder, schema, filter)?;
+            }
+
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(|error| DatabaseError::Other(format!("postgres begin failed: {error}")))?;
+
+            let affected = builder
+                .build()
+                .execute(&mut *tx)
+                .await
+                .map_err(|error| DatabaseError::Other(format!("postgres update_many failed: {error}")))?
+                .rows_affected();
+
+            tx.commit()
+                .await
+                .map_err(|error| DatabaseError::Other(format!("postgres commit failed: {error}")))?;
+
+            Ok(affected)
+        })
+    }
+
     fn delete(
         &self,
         context: &Context,
@@ -1275,6 +1371,46 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                 .await
                 .map(|result| result.rows_affected() > 0)
                 .map_err(|error| DatabaseError::Other(format!("postgres delete failed: {error}")))
+        })
+    }
+
+    fn delete_many(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        query: &QuerySpec,
+    ) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
+        let pool = self.pool;
+        let context = context.clone();
+        let query = query.clone();
+
+        Box::pin(async move {
+            Self::validate_context_support(&context)?;
+
+            let table = Self::qualified_table_name(&context, schema.id)?;
+            let mut builder = QueryBuilder::<Postgres>::new(format!("DELETE FROM {table} AS main"));
+            
+            let mut has_conditions = false;
+            Self::push_document_action_condition(
+                &mut builder,
+                &context,
+                schema,
+                "main",
+                PermissionEnum::Delete,
+                &mut has_conditions,
+            )?;
+            
+            for filter in query.filters() {
+                Self::push_condition_separator(&mut builder, &mut has_conditions);
+                Self::push_filter(&mut builder, schema, filter)?;
+            }
+
+            builder
+                .build()
+                .execute(pool)
+                .await
+                .map(|result| result.rows_affected())
+                .map_err(|error| DatabaseError::Other(format!("postgres delete_many failed: {error}")))
         })
     }
 

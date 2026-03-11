@@ -160,6 +160,77 @@ impl StorageAdapter for FakeAdapter {
         Box::pin(async move { Ok(rows.lock().expect("rows lock").remove(&key).is_some()) })
     }
 
+    fn update_many(
+        &self,
+        context: &Context,
+        schema: &'static database::CollectionSchema,
+        query: &QuerySpec,
+        values: StorageRecord,
+    ) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
+        let rows = self.rows.clone();
+        let schema_name = context.schema().to_string();
+        let collection = schema.id.to_string();
+        let query = query.clone();
+
+        Box::pin(async move {
+            let mut locked = rows.lock().expect("rows lock");
+            let mut count = 0;
+            let mut to_update = Vec::new();
+
+            for (key, record) in locked.iter() {
+                if key.0 == schema_name && key.1 == collection {
+                    if query.filters().iter().all(|filter| matches_filter(record, filter)) {
+                        to_update.push(key.clone());
+                    }
+                }
+            }
+
+            for key in to_update {
+                if let Some(record) = locked.get_mut(&key) {
+                    for (field, value) in &values {
+                        record.insert(field.clone(), value.clone());
+                    }
+                    count += 1;
+                }
+            }
+
+            Ok(count)
+        })
+    }
+
+    fn delete_many(
+        &self,
+        context: &Context,
+        schema: &'static database::CollectionSchema,
+        query: &QuerySpec,
+    ) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
+        let rows = self.rows.clone();
+        let schema_name = context.schema().to_string();
+        let collection = schema.id.to_string();
+        let query = query.clone();
+
+        Box::pin(async move {
+            let mut locked = rows.lock().expect("rows lock");
+            let mut count = 0;
+            let mut to_delete = Vec::new();
+
+            for (key, record) in locked.iter() {
+                if key.0 == schema_name && key.1 == collection {
+                    if query.filters().iter().all(|filter| matches_filter(record, filter)) {
+                        to_delete.push(key.clone());
+                    }
+                }
+            }
+
+            for key in to_delete {
+                locked.remove(&key);
+                count += 1;
+            }
+
+            Ok(count)
+        })
+    }
+
     fn find(
         &self,
         context: &Context,
@@ -237,6 +308,22 @@ fn matches_filter(record: &StorageRecord, filter: &Filter) -> bool {
         FilterOp::Lte(expected) => compare_value(value, expected, |ordering| {
             ordering.is_lt() || ordering.is_eq()
         }),
+        FilterOp::Contains(expected) => match (value, expected) {
+            (Some(StorageValue::String(s)), StorageValue::String(sub)) => s.contains(sub),
+            _ => false,
+        },
+        FilterOp::StartsWith(expected) => match (value, expected) {
+            (Some(StorageValue::String(s)), StorageValue::String(prefix)) => s.starts_with(prefix),
+            _ => false,
+        },
+        FilterOp::EndsWith(expected) => match (value, expected) {
+            (Some(StorageValue::String(s)), StorageValue::String(suffix)) => s.ends_with(suffix),
+            _ => false,
+        },
+        FilterOp::TextSearch(expected) => match (value, expected) {
+            (Some(StorageValue::String(s)), StorageValue::String(query)) => s.to_lowercase().contains(&query.to_lowercase()),
+            _ => false,
+        },
         FilterOp::IsNull => matches!(value, None | Some(StorageValue::Null)),
         FilterOp::IsNotNull => !matches!(value, None | Some(StorageValue::Null)),
     }

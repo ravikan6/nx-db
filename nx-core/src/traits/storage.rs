@@ -64,12 +64,27 @@ pub trait StorageAdapter: Send + Sync {
         values: StorageRecord,
     ) -> AdapterFuture<'_, Result<Option<StorageRecord>, DatabaseError>>;
 
+    fn update_many(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        query: &QuerySpec,
+        values: StorageRecord,
+    ) -> AdapterFuture<'_, Result<u64, DatabaseError>>;
+
     fn delete(
         &self,
         context: &Context,
         schema: &'static CollectionSchema,
         id: &str,
     ) -> AdapterFuture<'_, Result<bool, DatabaseError>>;
+
+    fn delete_many(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        query: &QuerySpec,
+    ) -> AdapterFuture<'_, Result<u64, DatabaseError>>;
 
     fn find(
         &self,

@@ -109,8 +109,22 @@ where
             .await
     }
 
+    pub async fn update_many(
+        &self,
+        query: QuerySpec,
+        input: M::Update,
+    ) -> Result<u64, DatabaseError> {
+        self.database
+            .update_many_models::<M>(&self.context, &query, input)
+            .await
+    }
+
     pub async fn delete(&self, id: &M::Id) -> Result<bool, DatabaseError> {
         self.database.delete_model::<M>(&self.context, id).await
+    }
+
+    pub async fn delete_many(&self, query: QuerySpec) -> Result<u64, DatabaseError> {
+        self.database.delete_many_models::<M>(&self.context, &query).await
     }
 
     pub async fn find(&self, query: QuerySpec) -> Result<Vec<M::Entity>, DatabaseError> {
