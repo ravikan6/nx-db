@@ -139,4 +139,92 @@ where
     pub async fn count(&self, query: QuerySpec) -> Result<u64, DatabaseError> {
         self.database.count_models::<M>(&self.context, &query).await
     }
+
+    pub async fn load_many_to_one<RM>(
+        &self,
+        entities: &[M::Entity],
+        extract_foreign_key: impl Fn(&M::Entity) -> Option<String>,
+    ) -> Result<std::collections::HashMap<String, RM::Entity>, DatabaseError>
+    where
+        RM: Model,
+        RM::Entity: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        if entities.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let mut keys = std::collections::HashSet::new();
+        for entity in entities {
+            if let Some(key) = extract_foreign_key(entity) {
+                keys.insert(key);
+            }
+        }
+
+        if keys.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let repo = self.database.scope(self.context.clone()).repo::<RM>();
+        let mut query = QuerySpec::new();
+        query = query.filter(crate::query::Filter {
+            field: crate::system_fields::FIELD_ID.to_string(),
+            op: crate::query::FilterOp::In(
+                keys.into_iter()
+                    .map(crate::traits::storage::StorageValue::String)
+                    .collect(),
+            ),
+        });
+
+        let related: Vec<RM::Entity> = repo.find(query).await?;
+        let mut map = std::collections::HashMap::with_capacity(related.len());
+        for rel in related {
+            let id = RM::id_to_string(RM::entity_to_id(&rel)).to_string();
+            map.insert(id, rel);
+        }
+
+        Ok(map)
+    }
+
+    pub async fn load_one_to_many<RM>(
+        &self,
+        entities: &[M::Entity],
+        foreign_key_field: &str,
+        extract_local_key: impl Fn(&M::Entity) -> String,
+        extract_related_foreign_key: impl Fn(&RM::Entity) -> Option<String>,
+    ) -> Result<std::collections::HashMap<String, Vec<RM::Entity>>, DatabaseError>
+    where
+        RM: Model,
+        RM::Entity: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        if entities.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        let mut keys = std::collections::HashSet::new();
+        for entity in entities {
+            keys.insert(extract_local_key(entity));
+        }
+
+        let repo = self.database.scope(self.context.clone()).repo::<RM>();
+        let mut query = QuerySpec::new();
+        query = query.filter(crate::query::Filter {
+            field: foreign_key_field.to_string(),
+            op: crate::query::FilterOp::In(
+                keys.into_iter()
+                    .map(crate::traits::storage::StorageValue::String)
+                    .collect(),
+            ),
+        });
+
+        let related: Vec<RM::Entity> = repo.find(query).await?;
+        let mut map: std::collections::HashMap<String, Vec<RM::Entity>> = std::collections::HashMap::new();
+
+        for rel in related {
+            if let Some(fk) = extract_related_foreign_key(&rel) {
+                map.entry(fk).or_default().push(rel);
+            }
+        }
+
+        Ok(map)
+    }
 }
