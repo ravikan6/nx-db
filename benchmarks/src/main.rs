@@ -45,22 +45,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let user_repo = db_scoped.repo::<User>();
     let post_repo = db_scoped.repo::<Post>();
     
+    let mut create_users = Vec::with_capacity(user_count);
     for i in 0..user_count {
-        let user = user_repo.insert(CreateUser {
+        create_users.push(CreateUser {
             id: Key::new(format!("user_{}", i)).unwrap(),
             name: format!("User {}", i),
             email: format!("user{}@example.com", i),
             metadata: Some(format!("{{\"index\": {}, \"type\": \"benchmark\"}}", i)),
             permissions: vec!["read(\"any\")".to_string()],
-        }).await?;
-        
+        });
+    }
+    
+    let users = user_repo.insert_many(create_users).await?;
+    
+    for user in users {
+        let u_id_str = user.id.to_string();
         let mut posts = Vec::with_capacity(posts_per_user);
         for j in 0..posts_per_user {
             posts.push(CreatePost {
-                id: Key::new(format!("post_{}_{}", i, j)).unwrap(),
-                title: format!("Post {} by User {}", j, i),
+                id: Key::new(format!("post_{}_{}", u_id_str, j)).unwrap(),
+                title: format!("Post {} by {}", j, u_id_str),
                 content: Some("Benchmarking our production grade text search capabilities with some dummy content.".to_string()),
-                author: user.id.clone().to_string(),
+                author: u_id_str.clone(),
                 permissions: vec!["read(\"any\")".to_string()],
             });
         }
