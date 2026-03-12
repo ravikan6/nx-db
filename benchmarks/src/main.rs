@@ -59,9 +59,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let users = user_repo.insert_many(create_users).await?;
     
+    let mut posts = Vec::with_capacity(posts_per_user * user_count);
     for user in users {
         let u_id_str = user.id.to_string();
-        let mut posts = Vec::with_capacity(posts_per_user);
         for j in 0..posts_per_user {
             posts.push(CreatePost {
                 id: Key::new(format!("post_{}_{}", u_id_str, j)).unwrap(),
@@ -71,8 +71,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 permissions: vec!["read(\"any\")".to_string()],
             });
         }
-        post_repo.insert_many(posts).await?;
     }
+    post_repo.insert_many(posts).await?;
     
     let duration = start.elapsed();
     println!("Batch Insert: {:?} ({:.2} ops/sec)", duration, (user_count + user_count * posts_per_user) as f64 / duration.as_secs_f64());

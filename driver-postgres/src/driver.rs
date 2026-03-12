@@ -337,80 +337,6 @@ impl<'a> PostgresAdapter<'a> {
         Ok(())
     }
 
-    async fn sync_permissions<'e>(
-        executor: &mut sqlx::Transaction<'e, Postgres>,
-        context: &Context,
-        schema: &'static CollectionSchema,
-        sequence: i64,
-        permissions: &[String],
-    ) -> Result<(), DatabaseError> {
-        Self::sync_permissions_many(executor, context, schema, &[(sequence, permissions)]).await
-    }
-
-    async fn sync_permissions_many<'e>(
-        executor: &mut sqlx::Transaction<'e, Postgres>,
-        context: &Context,
-        schema: &'static CollectionSchema,
-        items: &[(i64, &[String])],
-    ) -> Result<(), DatabaseError> {
-        if items.is_empty() {
-            return Ok(());
-        }
-
-        let table = Self::qualified_permissions_table_name(context, schema.id)?;
-        let sequences: Vec<i64> = items.iter().map(|(s, _)| *s).collect();
-
-        let mut builder = QueryBuilder::<Postgres>::new(format!("DELETE FROM {table} WHERE document_id IN ("));
-        let mut separated = builder.separated(", ");
-        for sequence in sequences {
-            separated.push_bind(sequence);
-        }
-        separated.push_unseparated(")");
-
-        builder
-            .build()
-            .execute(&mut **executor)
-            .await
-            .map_err(|error| {
-                DatabaseError::Other(format!("postgres permissions delete many failed: {error}"))
-            })?;
-
-        let mut all_rows = Vec::new();
-        for (sequence, permissions) in items {
-            let grouped = Self::permission_rows(permissions)?;
-            for (perm_type, values) in grouped {
-                all_rows.push((*sequence, perm_type, values));
-            }
-        }
-
-        if all_rows.is_empty() {
-            return Ok(());
-        }
-
-        let mut builder = QueryBuilder::<Postgres>::new(format!(
-            "INSERT INTO {table} (document_id, permission_type, permissions) "
-        ));
-
-        builder.push_values(
-            all_rows.into_iter(),
-            |mut separated, (sequence, permission_type, values)| {
-                separated.push_bind(sequence);
-                separated.push_bind(permission_type);
-                separated.push_bind(values);
-            },
-        );
-
-        builder
-            .build()
-            .execute(&mut **executor)
-            .await
-            .map_err(|error| {
-                DatabaseError::Other(format!("postgres permissions insert many failed: {error}"))
-            })?;
-
-        Ok(())
-    }
-
     fn append_bind(
         separated: &mut sqlx::query_builder::Separated<'_, '_, Postgres, &'static str>,
         value: &StorageValue,
@@ -1095,7 +1021,8 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                 )));
             }
 
-            let mut builder = QueryBuilder::<Postgres>::new(format!("INSERT INTO {table} ("));
+            let mut builder = QueryBuilder::<Postgres>::new("WITH inserted AS (");
+            builder.push(format!("INSERT INTO {table} ("));
             {
                 let mut separated = builder.separated(", ");
                 separated.push(Self::quoted_system_column(COLUMN_ID)?);
@@ -1127,27 +1054,39 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                 }
             }
             builder.push(format!(
-                ") RETURNING {}",
+                ") RETURNING {} ",
                 Self::quoted_system_column(COLUMN_SEQUENCE)?
             ));
+            builder.push(")");
 
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(|error| DatabaseError::Other(format!("postgres begin failed: {error}")))?;
+            let perms_table = Self::qualified_permissions_table_name(&context, schema.id)?;
+            let grouped_perms = Self::permission_rows(&permissions)?;
 
-            let row = builder.build().fetch_one(&mut *tx).await.map_err(|error| {
-                DatabaseError::Other(format!("postgres insert failed: {error}"))
+            if !grouped_perms.is_empty() {
+                builder.push(format!(", sync_perms AS (INSERT INTO {perms_table} (document_id, permission_type, permissions) "));
+                let mut first = true;
+                for (pt, pv) in grouped_perms {
+                    if !first {
+                        builder.push(" UNION ALL ");
+                    }
+                    builder.push("SELECT (SELECT _sequence FROM inserted), ");
+                    builder.push_bind(pt);
+                    builder.push(", ");
+                    builder.push_bind(pv);
+                    first = false;
+                }
+                builder.push(") ");
+            }
+
+
+            builder.push("SELECT * FROM inserted");
+
+            let row = builder.build().fetch_one(pool).await.map_err(|error| {
+                DatabaseError::Other(format!("postgres single-roundtrip insert failed: {error}"))
             })?;
 
-            let sequence = row.try_get::<i64, _>(COLUMN_SEQUENCE).map_err(|error| {
+            let sequence = row.try_get::<i64, _>(0).map_err(|error| {
                 DatabaseError::Other(format!("postgres sequence read failed: {error}"))
-            })?;
-
-            Self::sync_permissions(&mut tx, &context, schema, sequence, &permissions).await?;
-
-            tx.commit().await.map_err(|error| {
-                DatabaseError::Other(format!("postgres commit failed: {error}"))
             })?;
 
             let mut values = values;
@@ -1177,11 +1116,6 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                 return Ok(Vec::new());
             }
 
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(|error| DatabaseError::Other(format!("postgres begin failed: {error}")))?;
-
             let table = Self::qualified_table_name(&context, schema.id)?;
             let mut results = Vec::with_capacity(values.len());
 
@@ -1194,8 +1128,9 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
             }
 
             for (keys, group_records) in groups {
-                let mut builder = QueryBuilder::<Postgres>::new(format!("INSERT INTO {table} ("));
-                
+                let mut builder = QueryBuilder::<Postgres>::new("WITH inserted AS (");
+                builder.push(format!("INSERT INTO {table} ("));
+
                 let attributes: Vec<_> = Self::persisted_attributes(schema)
                     .into_iter()
                     .filter(|a| keys.iter().any(|k| k == a.id))
@@ -1213,7 +1148,7 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                 }
 
                 builder.push(") ");
-                
+
                 let mut row_data = Vec::with_capacity(group_records.len());
 
                 builder.push_values(group_records, |mut separated, record| {
@@ -1221,12 +1156,12 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                     let created_at = Self::extract_optional_timestamp(&record, FIELD_CREATED_AT).unwrap_or_default();
                     let updated_at = Self::extract_optional_timestamp(&record, FIELD_UPDATED_AT).unwrap_or_default();
                     let permissions = Self::extract_optional_string_array(&record, FIELD_PERMISSIONS).unwrap_or_default();
-                    
+
                     separated.push_bind(uid);
                     separated.push_bind(created_at);
                     separated.push_bind(updated_at);
                     separated.push_bind(permissions.clone());
-                    
+
                     for attribute in &attributes {
                         let value = record.get(attribute.id).unwrap(); // Guaranteed by grouping
                         Self::append_bind(&mut separated, value).unwrap();
@@ -1234,46 +1169,75 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                             separated.push_unseparated("::jsonb");
                         }
                     }
-                    
+
                     row_data.push((permissions, record));
                 });
 
-                builder.push(format!(" RETURNING {}", Self::quoted_system_column(COLUMN_SEQUENCE)?));
+                builder.push(format!(
+                    " RETURNING {}, {} ", 
+                    Self::quoted_system_column(COLUMN_SEQUENCE)?,
+                    Self::quoted_system_column(COLUMN_ID)?
+                ));
+                builder.push(")");
 
-                let rows = builder.build().fetch_all(&mut *tx).await.map_err(|error| {
-                    DatabaseError::Other(format!("postgres insert_many failed: {error}"))
+                let perms_table = Self::qualified_permissions_table_name(&context, schema.id)?;
+
+                let mut perm_data_count = 0;
+                
+                for (permissions, record) in &row_data {
+                    let uid = Self::extract_string(record, FIELD_ID).unwrap_or_default();
+                    let grouped = Self::permission_rows(permissions)?;
+                    for (pt, pv) in grouped {
+                        if perm_data_count > 0 {
+                            builder.push(" UNION ALL ");
+                        } else {
+                            builder.push(", perm_data AS (");
+                        }
+                        builder.push("SELECT ");
+                        builder.push_bind(uid.clone());
+                        builder.push(" as uid, ");
+                        builder.push_bind(pt);
+                        builder.push(" as pt, ");
+                        builder.push_bind(pv);
+                        builder.push(" as pv");
+                        perm_data_count += 1;
+                    }
+                }
+
+                if perm_data_count > 0 {
+                    builder.push(") ");
+                    builder.push(format!(", sync_perms AS (INSERT INTO {perms_table} (document_id, permission_type, permissions) "));
+                    builder.push("SELECT inserted.");
+                    builder.push(Self::quoted_system_column(COLUMN_SEQUENCE)?);
+                    builder.push(", p.pt, p.pv FROM inserted ");
+                    builder.push("JOIN perm_data p ON inserted.");
+                    builder.push(Self::quoted_system_column(COLUMN_ID)?);
+                    builder.push(" = p.uid) ");
+                }
+
+
+                builder.push("SELECT * FROM inserted ORDER BY ");
+                builder.push(Self::quoted_system_column(COLUMN_SEQUENCE)?);
+                builder.push(" ASC");
+
+                let rows = builder.build().fetch_all(pool).await.map_err(|error| {
+                    DatabaseError::Other(format!("postgres single-roundtrip insert_many failed: {error}"))
                 })?;
 
-                let mut sync_items = Vec::with_capacity(rows.len());
-
-                for (row, (permissions, mut record)) in rows.into_iter().zip(row_data.into_iter()) {
+                for (row, (_permissions, mut record)) in rows.into_iter().zip(row_data.into_iter()) {
                     let sequence = row.try_get::<i64, _>(COLUMN_SEQUENCE).map_err(|error| {
                         DatabaseError::Other(format!("postgres sequence read failed: {error}"))
                     })?;
 
-                    sync_items.push((sequence, permissions));
-
                     record.insert(FIELD_SEQUENCE.to_string(), StorageValue::Int(sequence));
                     results.push(record);
                 }
-
-                // Batch sync all permissions for this group
-                let sync_refs: Vec<(i64, &[String])> = sync_items.iter().map(|(s, p)| (*s, p.as_slice())).collect();
-                Self::sync_permissions_many(&mut tx, &context, schema, &sync_refs).await?;
-
-                // Note: results already have FIELD_PERMISSIONS from the original records if they were partial,
-                // but we might want to ensure they are consistent.
-                // In insert_many above, record was taken from row_data which came from group_records.
-                // The FIELD_PERMISSIONS were already there if provided.
             }
 
-            tx.commit().await.map_err(|error| {
-                DatabaseError::Other(format!("postgres commit failed: {error}"))
-            })?;
-
             Ok(results)
-        })
-    }
+            })
+            }
+
 
     fn get(
         &self,
@@ -1349,7 +1313,8 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                 return self.get(&context, schema, &id).await;
             }
 
-            let mut builder = QueryBuilder::<Postgres>::new(format!("UPDATE {table} AS main SET "));
+            let mut builder = QueryBuilder::<Postgres>::new("WITH updated AS (");
+            builder.push(format!("UPDATE {table} AS main SET "));
             Self::push_update_assignments(
                 &mut builder,
                 schema,
@@ -1373,39 +1338,41 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                 PermissionEnum::Update,
                 &mut has_conditions,
             )?;
-            builder.push(format!(" RETURNING {select_columns}"));
-
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(|error| DatabaseError::Other(format!("postgres begin failed: {error}")))?;
-
-            let row = builder
-                .build()
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(|error| {
-                    DatabaseError::Other(format!("postgres update failed: {error}"))
-                })?;
-
-            let Some(row) = row else {
-                tx.rollback().await.map_err(|error| {
-                    DatabaseError::Other(format!("postgres rollback failed: {error}"))
-                })?;
-                return Ok(None);
-            };
-
-            let sequence = row.try_get::<i64, _>(COLUMN_SEQUENCE).map_err(|error| {
-                DatabaseError::Other(format!("postgres sequence read failed: {error}"))
-            })?;
+            builder.push(format!(" RETURNING {select_columns})"));
 
             if permissions_update {
-                Self::sync_permissions(&mut tx, &context, schema, sequence, &permissions).await?;
+                let perms_table = Self::qualified_permissions_table_name(&context, schema.id)?;
+                let grouped_perms = Self::permission_rows(&permissions)?;
+                
+                builder.push(format!(", clear_perms AS (DELETE FROM {perms_table} WHERE document_id = (SELECT _sequence FROM updated))"));
+                
+                if !grouped_perms.is_empty() {
+                    builder.push(format!(", sync_perms AS (INSERT INTO {perms_table} (document_id, permission_type, permissions) "));
+                    let mut first = true;
+                    for (pt, pv) in grouped_perms {
+                        if !first {
+                            builder.push(" UNION ALL ");
+                        }
+                        builder.push("SELECT (SELECT _sequence FROM updated), ");
+                        builder.push_bind(pt);
+                        builder.push(", ");
+                        builder.push_bind(pv);
+                        first = false;
+                    }
+                    builder.push(") ");
+                }
+
             }
 
-            tx.commit().await.map_err(|error| {
-                DatabaseError::Other(format!("postgres commit failed: {error}"))
+            builder.push("SELECT * FROM updated");
+
+            let row = builder.build().fetch_optional(pool).await.map_err(|error| {
+                DatabaseError::Other(format!("postgres single-roundtrip update failed: {error}"))
             })?;
+
+            let Some(row) = row else {
+                return Ok(None);
+            };
 
             Ok(Some(Self::row_to_record(&row, schema)?))
         })
@@ -1437,7 +1404,8 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                 return Ok(0);
             }
 
-            let mut builder = QueryBuilder::<Postgres>::new(format!("UPDATE {table} AS main SET "));
+            let mut builder = QueryBuilder::<Postgres>::new("WITH updated AS (");
+            builder.push(format!("UPDATE {table} AS main SET "));
             Self::push_update_assignments(
                 &mut builder,
                 schema,
@@ -1462,23 +1430,46 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                 Self::push_filter(&mut builder, schema, filter)?;
             }
 
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(|error| DatabaseError::Other(format!("postgres begin failed: {error}")))?;
+            builder.push(format!(
+                " RETURNING main.{}",
+                Self::quoted_system_column(COLUMN_SEQUENCE)?
+            ));
+            builder.push(")");
 
-            let affected = builder
-                .build()
-                .execute(&mut *tx)
-                .await
-                .map_err(|error| DatabaseError::Other(format!("postgres update_many failed: {error}")))?
-                .rows_affected();
+            if permissions_update {
+                let perms_table = Self::qualified_permissions_table_name(&context, schema.id)?;
+                let grouped_perms = Self::permission_rows(&permissions)?;
+                
+                builder.push(format!(", clear_perms AS (DELETE FROM {perms_table} WHERE document_id IN (SELECT _sequence FROM updated))"));
+                
+                if !grouped_perms.is_empty() {
+                    builder.push(format!(", sync_perms AS (INSERT INTO {perms_table} (document_id, permission_type, permissions) "));
+                    builder.push("SELECT updated._sequence, p.pt, p.pv FROM updated, ");
+                    builder.push(" (");
+                    let mut first = true;
+                    for (pt, pv) in grouped_perms {
+                        if !first {
+                            builder.push(" UNION ALL ");
+                        }
+                        builder.push("SELECT ");
+                        builder.push_bind(pt);
+                        builder.push(" as pt, ");
+                        builder.push_bind(pv);
+                        builder.push(" as pv");
+                        first = false;
+                    }
+                    builder.push(") AS p) ");
+                }
 
-            tx.commit()
-                .await
-                .map_err(|error| DatabaseError::Other(format!("postgres commit failed: {error}")))?;
+            }
 
-            Ok(affected)
+            builder.push("SELECT COUNT(*) FROM updated");
+
+            let row = builder.build().fetch_one(pool).await.map_err(|error| {
+                DatabaseError::Other(format!("postgres single-roundtrip update_many failed: {error}"))
+            })?;
+
+            Ok(row.try_get::<i64, _>(0).unwrap_or(0) as u64)
         })
     }
 
