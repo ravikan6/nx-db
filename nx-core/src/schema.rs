@@ -161,6 +161,28 @@ pub struct IndexSchema {
     pub orders: &'static [Order],
 }
 
+impl crate::traits::migration::MigrationCollection for &'static CollectionSchema {
+    fn id(&self) -> &str { self.id }
+    fn attributes(&self) -> Vec<crate::traits::migration::MigrationAttribute> {
+        self.attributes.iter().map(|a| crate::traits::migration::MigrationAttribute {
+            id: a.id.to_string(),
+            column: a.column.to_string(),
+            kind: a.kind,
+            required: a.required,
+            array: a.array,
+            persistence: a.persistence,
+        }).collect()
+    }
+    fn indexes(&self) -> Vec<crate::traits::migration::MigrationIndex> {
+        self.indexes.iter().map(|i| crate::traits::migration::MigrationIndex {
+            id: i.id.to_string(),
+            kind: i.kind,
+            attributes: i.attributes.iter().map(|a| a.to_string()).collect(),
+            orders: i.orders.to_vec(),
+        }).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

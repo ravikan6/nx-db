@@ -1310,6 +1310,50 @@ fn escape_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
+impl nx_core::traits::migration::MigrationCollection for CollectionSpec {
+    fn id(&self) -> &str { &self.id }
+    fn attributes(&self) -> Vec<nx_core::traits::migration::MigrationAttribute> {
+        self.attributes.iter().map(|a| nx_core::traits::migration::MigrationAttribute {
+            id: a.id.clone(),
+            column: a.column.clone().unwrap_or_else(|| a.id.clone()),
+            kind: match a.kind {
+                AttributeKindSpec::String => nx_core::AttributeKind::String,
+                AttributeKindSpec::Integer => nx_core::AttributeKind::Integer,
+                AttributeKindSpec::Float => nx_core::AttributeKind::Float,
+                AttributeKindSpec::Boolean => nx_core::AttributeKind::Boolean,
+                AttributeKindSpec::Timestamp => nx_core::AttributeKind::Timestamp,
+                AttributeKindSpec::Relationship => nx_core::AttributeKind::Relationship,
+                AttributeKindSpec::Virtual => nx_core::AttributeKind::Virtual,
+                AttributeKindSpec::Json => nx_core::AttributeKind::Json,
+            },
+            required: a.required,
+            array: a.array,
+            persistence: if a.kind == AttributeKindSpec::Virtual {
+                nx_core::AttributePersistence::Virtual
+            } else {
+                nx_core::AttributePersistence::Persisted
+            },
+        }).collect()
+    }
+    fn indexes(&self) -> Vec<nx_core::traits::migration::MigrationIndex> {
+        self.indexes.iter().map(|i| nx_core::traits::migration::MigrationIndex {
+            id: i.id.clone(),
+            kind: match i.kind {
+                IndexKindSpec::Key => nx_core::IndexKind::Key,
+                IndexKindSpec::Unique => nx_core::IndexKind::Unique,
+                IndexKindSpec::FullText => nx_core::IndexKind::FullText,
+                IndexKindSpec::Spatial => nx_core::IndexKind::Spatial,
+            },
+            attributes: i.attributes.clone(),
+            orders: i.orders.iter().map(|o| match o {
+                OrderSpec::Asc => nx_core::Order::Asc,
+                OrderSpec::Desc => nx_core::Order::Desc,
+                OrderSpec::None => nx_core::Order::None,
+            }).collect(),
+        }).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{generate, parse_project_spec, validate_project_spec};

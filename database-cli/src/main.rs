@@ -1,60 +1,53 @@
-use database_codegen::{
-    CodegenError, generate_from_json, parse_project_spec, validate_project_spec,
-};
-use std::env;
-use std::error::Error;
-use std::fmt::{Display, Formatter};
+use clap::{Parser, Subcommand};
+use database_codegen::{generate_from_json, parse_project_spec, validate_project_spec};
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug)]
-enum CliError {
-    Usage(String),
-    Io(std::io::Error),
-    Codegen(CodegenError),
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
 }
 
-impl Display for CliError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Usage(message) => f.write_str(message),
-            Self::Io(error) => write!(f, "io error: {error}"),
-            Self::Codegen(error) => write!(f, "{error}"),
-        }
-    }
+#[derive(Subcommand)]
+enum Commands {
+    /// Generate Rust models from a schema file
+    Generate {
+        /// Input schema.json file
+        #[arg(short, long)]
+        input: PathBuf,
+        /// Output .rs file
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+    /// Validate a schema file
+    Check {
+        /// Input schema.json file
+        #[arg(short, long)]
+        input: PathBuf,
+    },
+    /// Apply schema changes to the database
+    Migrate {
+        /// Input schema.json file
+        #[arg(short, long)]
+        input: PathBuf,
+        /// Database URL (defaults to DATABASE_URL env var)
+        #[arg(short, long)]
+        database_url: Option<String>,
+        /// Dry run: show changes without applying them
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
-impl Error for CliError {}
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenvy::dotenv().ok();
+    let cli = Cli::parse();
 
-impl From<std::io::Error> for CliError {
-    fn from(value: std::io::Error) -> Self {
-        Self::Io(value)
-    }
-}
-
-impl From<CodegenError> for CliError {
-    fn from(value: CodegenError) -> Self {
-        Self::Codegen(value)
-    }
-}
-
-fn main() {
-    if let Err(error) = run() {
-        eprintln!("{error}");
-        std::process::exit(1);
-    }
-}
-
-fn run() -> Result<(), CliError> {
-    let mut args = env::args().skip(1);
-    let Some(command) = args.next() else {
-        return Err(CliError::Usage(usage()));
-    };
-
-    match command.as_str() {
-        "generate" => {
-            let input = parse_flag_path(&mut args, "--input")?;
-            let output = parse_flag_path(&mut args, "--output")?;
+    match cli.command {
+        Commands::Generate { input, output } => {
             let contents = fs::read_to_string(&input)?;
             let generated = generate_from_json(&contents)?;
 
@@ -66,42 +59,65 @@ fn run() -> Result<(), CliError> {
 
             fs::write(&output, generated)?;
             println!("generated {}", output.display());
-            Ok(())
         }
-        "check" => {
-            let input = parse_flag_path(&mut args, "--input")?;
+        Commands::Check { input } => {
             let contents = fs::read_to_string(&input)?;
             let spec = parse_project_spec(&contents)?;
             validate_project_spec(&spec)?;
             println!("schema ok: {} collection(s)", spec.collections.len());
-            Ok(())
         }
-        "--help" | "-h" | "help" => {
-            println!("{}", usage());
-            Ok(())
+        Commands::Migrate { input, database_url, dry_run } => {
+            let url = database_url
+                .or_else(|| std::env::var("DATABASE_URL").ok())
+                .ok_or("Database URL not provided. Set DATABASE_URL env var or use --database-url")?;
+
+            let contents = fs::read_to_string(&input)?;
+            let spec = parse_project_spec(&contents)?;
+            validate_project_spec(&spec)?;
+
+            let pool = sqlx::PgPool::connect(&url).await?;
+            let engine = database::migration::MigrationEngine::new(&pool);
+            let context = database::Context::default();
+
+            let collections: Vec<&dyn database::traits::migration::MigrationCollection> = spec.collections
+                .iter()
+                .map(|c| c as &dyn database::traits::migration::MigrationCollection)
+                .collect();
+
+            let changes: Vec<database::migration::MigrationChange> = engine.diff(&context, &collections).await?;
+
+            if changes.is_empty() {
+                println!("Database is up to date.");
+                return Ok(());
+            }
+
+            println!("Pending changes:");
+            for change in &changes {
+                match change {
+                    database::migration::MigrationChange::CreateTable(id) => {
+                        println!("  - Create table {}", id);
+                    }
+                    database::migration::MigrationChange::AddColumn { table, column, sql_type, .. } => {
+                        println!("  - Add column {}.{} ({})", table, column, sql_type);
+                    }
+                    database::migration::MigrationChange::CreateIndex { index_id, .. } => {
+                        println!("  - Create index {}", index_id);
+                    }
+                    database::migration::MigrationChange::DropIndex { index_id, .. } => {
+                        println!("  - Drop index {}", index_id);
+                    }
+                }
+            }
+
+            if dry_run {
+                println!("Dry run: skipping application of changes.");
+            } else {
+                println!("Applying changes...");
+                engine.migrate(&context, &collections).await?;
+                println!("Migration successful.");
+            }
         }
-        _ => Err(CliError::Usage(usage())),
-    }
-}
-
-fn parse_flag_path(
-    args: &mut impl Iterator<Item = String>,
-    expected_flag: &str,
-) -> Result<PathBuf, CliError> {
-    let flag = args.next().ok_or_else(|| CliError::Usage(usage()))?;
-    if flag != expected_flag {
-        return Err(CliError::Usage(usage()));
     }
 
-    let value = args.next().ok_or_else(|| CliError::Usage(usage()))?;
-    Ok(PathBuf::from(value))
-}
-
-fn usage() -> String {
-    [
-        "Usage:",
-        "  database-cli generate --input <schema.json> --output <generated.rs>",
-        "  database-cli check --input <schema.json>",
-    ]
-    .join("\n")
+    Ok(())
 }

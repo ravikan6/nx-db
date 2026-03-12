@@ -6,3 +6,8 @@ pub use driver_postgres as postgres;
 
 #[cfg(feature = "postgres")]
 pub use driver_postgres::PostgresAdapter;
+
+#[cfg(feature = "postgres")]
+pub mod migration {
+    pub use driver_postgres::migration::*;
+}

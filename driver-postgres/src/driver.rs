@@ -34,7 +34,7 @@ impl<'a> PostgresAdapter<'a> {
         chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
     }
 
-    fn quote_identifier(identifier: &str) -> Result<String, DatabaseError> {
+    pub(crate) fn quote_identifier(identifier: &str) -> Result<String, DatabaseError> {
         if !Self::is_valid_identifier(identifier) {
             return Err(DatabaseError::Other(format!(
                 "invalid postgres identifier: {identifier}"
@@ -44,25 +44,25 @@ impl<'a> PostgresAdapter<'a> {
         Ok(format!("\"{identifier}\""))
     }
 
-    fn qualified_table_name(context: &Context, collection: &str) -> Result<String, DatabaseError> {
+    pub(crate) fn qualified_table_name(context: &Context, collection: &str) -> Result<String, DatabaseError> {
         let schema = Self::quote_identifier(context.schema())?;
         let collection = Self::quote_identifier(collection)?;
         Ok(format!("{schema}.{collection}"))
     }
 
-    fn qualified_permissions_table_name(
+    pub(crate) fn qualified_permissions_table_name(
         context: &Context,
         collection: &str,
     ) -> Result<String, DatabaseError> {
         Self::qualified_table_name(context, &format!("{collection}_perms"))
     }
 
-    fn quoted_system_column(identifier: &str) -> Result<String, DatabaseError> {
+    pub(crate) fn quoted_system_column(identifier: &str) -> Result<String, DatabaseError> {
         Self::quote_identifier(identifier)
     }
 
-    fn sql_type(attribute: &nx_core::AttributeSchema) -> Result<String, DatabaseError> {
-        let base = match attribute.kind {
+    pub(crate) fn sql_type(kind: AttributeKind, array: bool) -> String {
+        let base = match kind {
             AttributeKind::String | AttributeKind::Relationship | AttributeKind::Virtual => "TEXT",
             AttributeKind::Integer => "BIGINT",
             AttributeKind::Float => "DOUBLE PRECISION",
@@ -71,10 +71,10 @@ impl<'a> PostgresAdapter<'a> {
             AttributeKind::Json => "JSONB",
         };
 
-        if attribute.array {
-            Ok(format!("{base}[]"))
+        if array {
+            format!("{base}[]")
         } else {
-            Ok(base.to_string())
+            base.to_string()
         }
     }
 
@@ -124,7 +124,7 @@ impl<'a> PostgresAdapter<'a> {
         Ok(columns.join(", "))
     }
 
-    fn quoted_column_list(
+    pub(crate) fn quoted_column_list(
         schema: &'static CollectionSchema,
         attributes: &[&str],
         orders: &[Order],
@@ -150,7 +150,7 @@ impl<'a> PostgresAdapter<'a> {
         Ok(out.join(", "))
     }
 
-    fn full_text_expression(
+    pub(crate) fn full_text_expression(
         schema: &'static CollectionSchema,
         attributes: &[&str],
     ) -> Result<String, DatabaseError> {
@@ -172,7 +172,7 @@ impl<'a> PostgresAdapter<'a> {
         ))
     }
 
-    fn internal_index_statements(
+    pub(crate) fn internal_index_statements(
         schema: &'static CollectionSchema,
         table: &str,
         perms_table: &str,
@@ -213,7 +213,7 @@ impl<'a> PostgresAdapter<'a> {
         ])
     }
 
-    fn schema_index_statements(
+    pub(crate) fn schema_index_statements(
         schema: &'static CollectionSchema,
         table: &str,
     ) -> Result<Vec<String>, DatabaseError> {
@@ -979,7 +979,7 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
 
             for attribute in Self::persisted_attributes(schema) {
                 let column = Self::quote_identifier(attribute.column)?;
-                let sql_type = Self::sql_type(attribute)?;
+                let sql_type = Self::sql_type(attribute.kind, attribute.array);
                 let required = if attribute.required { " NOT NULL" } else { "" };
 
                 columns.push(format!("{column} {sql_type}{required}"));

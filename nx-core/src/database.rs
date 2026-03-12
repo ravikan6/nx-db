@@ -272,7 +272,7 @@ where
 
         let stored = self.adapter.insert(context, collection, encoded).await?;
         let entity = self
-            .materialize_entity::<M>(context, stored.clone())
+            .materialize_entity_fast::<M>(context, collection, stored.clone(), false)
             .await?;
 
         // Populate cache on insert
@@ -332,7 +332,7 @@ where
         };
 
         let entity = self
-            .materialize_entity::<M>(context, stored.clone())
+            .materialize_entity_fast::<M>(context, collection, stored.clone(), false)
             .await?;
 
         // Invalidate cache on update, next get will repopulate
@@ -450,7 +450,7 @@ where
         }
 
         let entity = self
-            .materialize_entity::<M>(context, record.clone())
+            .materialize_entity_fast::<M>(context, collection, record.clone(), false)
             .await?;
 
         // Populate cache after successful read
@@ -487,7 +487,7 @@ where
 
         let mut entities = Vec::with_capacity(filtered.len());
         for record in filtered {
-            entities.push(self.materialize_entity::<M>(context, record).await?);
+            entities.push(self.materialize_entity_fast::<M>(context, collection, record, false).await?);
         }
 
         Ok(entities)
@@ -608,8 +608,23 @@ where
         M: Model,
     {
         let collection = self.collection(M::schema().id)?;
+        self.materialize_entity_fast::<M>(context, collection, record, true).await
+    }
+
+    pub(crate) async fn materialize_entity_fast<M>(
+        &self,
+        context: &Context,
+        _collection: &'static CollectionSchema,
+        record: StorageRecord,
+        validate: bool,
+    ) -> Result<M::Entity, DatabaseError>
+    where
+        M: Model,
+    {
         let decoded = M::decode_record(record, context)?;
-        self.validate_storage_record(collection, &decoded)?;
+        if validate {
+            self.validate_storage_record(_collection, &decoded)?;
+        }
         let entity = M::entity_from_record(decoded, context)?;
         M::resolve_entity(entity, context).await
     }
