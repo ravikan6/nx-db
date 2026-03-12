@@ -21,6 +21,7 @@ pub mod prod_models {
         pub name: String,
         pub email: String,
         pub metadata: Option<String>,
+        pub permissions: Vec<String>,
     }
 
     #[derive(Debug, Clone, Default)]
@@ -28,6 +29,7 @@ pub mod prod_models {
         pub name: Patch<String>,
         pub email: Patch<String>,
         pub metadata: Patch<Option<String>>,
+        pub permissions: Patch<Vec<String>>,
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -91,6 +93,13 @@ pub mod prod_models {
         indexes: USERS_INDEXES,
     };
 
+    impl User {
+        pub const ID: Field<User, UserId> = Field::new(database::FIELD_ID);
+        pub const NAME: Field<User, String> = Field::new("name");
+        pub const EMAIL: Field<User, String> = Field::new("email");
+        pub const METADATA: Field<User, Option<String>> = Field::new("metadata");
+    }
+
     impl Model for User {
         type Id = UserId;
         type Entity = UserEntity;
@@ -108,6 +117,7 @@ pub mod prod_models {
         fn create_to_record(input: Self::Create, _context: &Context) -> Result<StorageRecord, DatabaseError> {
             let mut record = StorageRecord::new();
             insert_value(&mut record, database::FIELD_ID, input.id);
+            insert_value(&mut record, database::FIELD_PERMISSIONS, input.permissions);
             insert_value(&mut record, "name", input.name);
             insert_value(&mut record, "email", input.email);
             if let Some(value) = input.metadata { insert_value(&mut record, "metadata", value); }
@@ -116,6 +126,7 @@ pub mod prod_models {
 
         fn update_to_record(input: Self::Update, _context: &Context) -> Result<StorageRecord, DatabaseError> {
             let mut record = StorageRecord::new();
+            if let Patch::Set(value) = input.permissions { insert_value(&mut record, database::FIELD_PERMISSIONS, value); }
             if let Patch::Set(value) = input.name { insert_value(&mut record, "name", value); }
             if let Patch::Set(value) = input.email { insert_value(&mut record, "email", value); }
             if let Patch::Set(value) = input.metadata { insert_value(&mut record, "metadata", value); }
@@ -148,6 +159,7 @@ pub mod prod_models {
         pub title: String,
         pub content: Option<String>,
         pub author: String,
+        pub permissions: Vec<String>,
     }
 
     #[derive(Debug, Clone, Default)]
@@ -155,6 +167,7 @@ pub mod prod_models {
         pub title: Patch<String>,
         pub content: Patch<Option<String>>,
         pub author: Patch<String>,
+        pub permissions: Patch<Vec<String>>,
     }
 
     #[derive(Debug, Clone, Copy)]
@@ -219,6 +232,13 @@ pub mod prod_models {
         indexes: POSTS_INDEXES,
     };
 
+    impl Post {
+        pub const ID: Field<Post, PostId> = Field::new(database::FIELD_ID);
+        pub const TITLE: Field<Post, String> = Field::new("title");
+        pub const CONTENT: Field<Post, Option<String>> = Field::new("content");
+        pub const AUTHOR: Field<Post, String> = Field::new("author");
+    }
+
     impl Model for Post {
         type Id = PostId;
         type Entity = PostEntity;
@@ -236,6 +256,7 @@ pub mod prod_models {
         fn create_to_record(input: Self::Create, _context: &Context) -> Result<StorageRecord, DatabaseError> {
             let mut record = StorageRecord::new();
             insert_value(&mut record, database::FIELD_ID, input.id);
+            insert_value(&mut record, database::FIELD_PERMISSIONS, input.permissions);
             insert_value(&mut record, "title", input.title);
             if let Some(value) = input.content { insert_value(&mut record, "content", value); }
             insert_value(&mut record, "author", input.author);
@@ -244,6 +265,7 @@ pub mod prod_models {
 
         fn update_to_record(input: Self::Update, _context: &Context) -> Result<StorageRecord, DatabaseError> {
             let mut record = StorageRecord::new();
+            if let Patch::Set(value) = input.permissions { insert_value(&mut record, database::FIELD_PERMISSIONS, value); }
             if let Patch::Set(value) = input.title { insert_value(&mut record, "title", value); }
             if let Patch::Set(value) = input.content { insert_value(&mut record, "content", value); }
             if let Patch::Set(value) = input.author { insert_value(&mut record, "author", value); }

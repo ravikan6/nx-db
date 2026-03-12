@@ -561,6 +561,7 @@ fn emit_collection(
         )
         .unwrap();
     }
+    writeln!(out, "        pub permissions: Vec<String>,").unwrap();
     writeln!(out, "    }}").unwrap();
     writeln!(out).unwrap();
 
@@ -579,6 +580,7 @@ fn emit_collection(
         )
         .unwrap();
     }
+    writeln!(out, "        pub permissions: Patch<Vec<String>>,").unwrap();
     writeln!(out, "    }}").unwrap();
     writeln!(out).unwrap();
 
@@ -815,6 +817,41 @@ fn emit_collection(
     writeln!(out, "    }};").unwrap();
     writeln!(out).unwrap();
 
+    writeln!(out, "    impl {model_name} {{").unwrap();
+    writeln!(
+        out,
+        "        pub const ID: Field<{model_name}, {id_name}> = Field::new(database::FIELD_ID);"
+    )
+    .unwrap();
+    for attribute in &collection.attributes {
+        if attribute.kind == AttributeKindSpec::Virtual {
+            continue;
+        }
+        let const_name = screaming_snake(&attribute.id);
+        if attribute.filters.is_empty() {
+            let query_type = query_field_type(attribute);
+            writeln!(
+                out,
+                "        pub const {const_name}: Field<{model_name}, {}> = Field::new(\"{}\");",
+                query_type, attribute.id
+            )
+            .unwrap();
+        } else {
+            let public_type = filtered_query_field_type(&filters_by_name, collection, attribute)?;
+            writeln!(
+                out,
+                "        pub const {const_name}: EncodedField<{model_name}, {}> = EncodedField::new(\"{}\", encode_query_{}_{});",
+                public_type,
+                attribute.id,
+                rust_field_name(&model_name),
+                rust_field_name(&attribute.id)
+            )
+            .unwrap();
+        }
+    }
+    writeln!(out, "    }}").unwrap();
+    writeln!(out).unwrap();
+
     writeln!(out, "    impl Model for {model_name} {{").unwrap();
     writeln!(out, "        type Id = {id_name};").unwrap();
     writeln!(out, "        type Entity = {entity_name};").unwrap();
@@ -843,6 +880,11 @@ fn emit_collection(
     writeln!(
         out,
         "            insert_value(&mut record, database::FIELD_ID, input.id);"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "            insert_value(&mut record, database::FIELD_PERMISSIONS, input.permissions);"
     )
     .unwrap();
     for attribute in &collection.attributes {
@@ -889,6 +931,7 @@ fn emit_collection(
     )
     .unwrap();
     writeln!(out, "            let mut record = StorageRecord::new();").unwrap();
+    writeln!(out, "            if let Patch::Set(value) = input.permissions {{ insert_value(&mut record, database::FIELD_PERMISSIONS, value); }}").unwrap();
     for attribute in &collection.attributes {
         if attribute.kind == AttributeKindSpec::Virtual {
             continue;

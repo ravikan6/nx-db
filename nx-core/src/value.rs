@@ -94,6 +94,7 @@ impl FromStorage for String {
     fn from_storage(value: StorageValue) -> Result<Self, DatabaseError> {
         match value {
             StorageValue::String(value) => Ok(value),
+            StorageValue::Json(value) => Ok(value),
             other => Err(DatabaseError::Other(format!(
                 "expected string storage value, got {other:?}"
             ))),

@@ -27,6 +27,65 @@ pub struct Database<A, R, E = NoopEventBus> {
 }
 
 impl<A, R> Database<A, R, NoopEventBus> {
+    pub fn builder() -> DatabaseBuilder<A, R, NoopEventBus> {
+        DatabaseBuilder::default()
+    }
+}
+
+pub struct DatabaseBuilder<A, R, E = NoopEventBus> {
+    adapter: Option<A>,
+    registry: Option<R>,
+    events: E,
+    cache: Option<Arc<dyn CacheBackend>>,
+}
+
+impl<A, R> Default for DatabaseBuilder<A, R, NoopEventBus> {
+    fn default() -> Self {
+        Self {
+            adapter: None,
+            registry: None,
+            events: NoopEventBus,
+            cache: None,
+        }
+    }
+}
+
+impl<A, R, E> DatabaseBuilder<A, R, E> {
+    pub fn with_adapter(mut self, adapter: A) -> Self {
+        self.adapter = Some(adapter);
+        self
+    }
+
+    pub fn with_registry(mut self, registry: R) -> Self {
+        self.registry = Some(registry);
+        self
+    }
+
+    pub fn with_events<NE: EventBus>(self, events: NE) -> DatabaseBuilder<A, R, NE> {
+        DatabaseBuilder {
+            adapter: self.adapter,
+            registry: self.registry,
+            events,
+            cache: self.cache,
+        }
+    }
+
+    pub fn with_cache<CB: CacheBackend + 'static>(mut self, cache: CB) -> Self {
+        self.cache = Some(Arc::new(cache));
+        self
+    }
+
+    pub fn build(self) -> Result<Database<A, R, E>, DatabaseError> {
+        Ok(Database {
+            adapter: self.adapter.ok_or_else(|| DatabaseError::Other("adapter is required".into()))?,
+            registry: self.registry.ok_or_else(|| DatabaseError::Other("registry is required".into()))?,
+            events: self.events,
+            cache: self.cache,
+        })
+    }
+}
+
+impl<A, R> Database<A, R, NoopEventBus> {
     pub fn new(adapter: A, registry: R) -> Self {
         Self {
             adapter,
@@ -633,12 +692,24 @@ where
         &self,
         context: &Context,
         collection: &'static CollectionSchema,
-        record: StorageRecord,
+        mut record: StorageRecord,
         partial: bool,
     ) -> Result<StorageRecord, DatabaseError>
     where
         M: Model,
     {
+        if !partial {
+            let now = time::OffsetDateTime::now_utc();
+            record.entry(crate::system_fields::FIELD_CREATED_AT.to_string())
+                .or_insert(StorageValue::Timestamp(now));
+            record.entry(crate::system_fields::FIELD_UPDATED_AT.to_string())
+                .or_insert(StorageValue::Timestamp(now));
+        } else {
+            let now = time::OffsetDateTime::now_utc();
+            record.entry(crate::system_fields::FIELD_UPDATED_AT.to_string())
+                .or_insert(StorageValue::Timestamp(now));
+        }
+
         if partial {
             self.validate_partial_record(collection, &record)?;
         } else {

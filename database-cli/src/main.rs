@@ -77,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let pool = sqlx::PgPool::connect(&url).await?;
             let engine = database::migration::MigrationEngine::new(&pool);
-            let context = database::Context::default();
+            let context = database::Context::default().with_schema("nuvix_bench");
 
             let collections: Vec<&dyn database::traits::migration::MigrationCollection> = spec.collections
                 .iter()

@@ -47,6 +47,12 @@ pub struct QuerySpec {
     offset: Option<usize>,
 }
 
+impl From<Filter> for QuerySpec {
+    fn from(filter: Filter) -> Self {
+        Self::new().filter(filter)
+    }
+}
+
 impl QuerySpec {
     pub fn new() -> Self {
         Self::default()

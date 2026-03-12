@@ -199,15 +199,15 @@ impl<'a> PostgresAdapter<'a> {
                 Self::quoted_system_column(COLUMN_PERMISSIONS)?
             ),
             format!(
-                "CREATE INDEX IF NOT EXISTS {} ON {perms_table} USING GIN (permissions)",
+                "CREATE INDEX IF NOT EXISTS {} ON {perms_table} USING GIN (\"permissions\")",
                 Self::quote_identifier(&format!("{}_perms_permissions_gin_idx", schema.id))?
             ),
             format!(
-                "CREATE INDEX IF NOT EXISTS {} ON {perms_table} (permission_type)",
+                "CREATE INDEX IF NOT EXISTS {} ON {perms_table} (\"permission_type\")",
                 Self::quote_identifier(&format!("{}_perms_permission_type_idx", schema.id))?
             ),
             format!(
-                "CREATE INDEX IF NOT EXISTS {} ON {perms_table} (document_id)",
+                "CREATE INDEX IF NOT EXISTS {} ON {perms_table} (\"document_id\")",
                 Self::quote_identifier(&format!("{}_perms_document_id_idx", schema.id))?
             ),
         ])
@@ -762,6 +762,9 @@ impl<'a> PostgresAdapter<'a> {
                 ))
             })?;
             Self::push_bind_value(builder, value)?;
+            if attribute.kind == AttributeKind::Json {
+                builder.push("::jsonb");
+            }
         }
 
         Ok(())
@@ -1090,6 +1093,9 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                         ))
                     })?;
                     Self::append_bind(&mut separated, value)?;
+                    if attribute.kind == AttributeKind::Json {
+                        separated.push_unseparated("::jsonb");
+                    }
                 }
             }
             builder.push(format!(
