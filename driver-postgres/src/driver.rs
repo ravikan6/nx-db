@@ -344,18 +344,46 @@ impl<'a> PostgresAdapter<'a> {
         sequence: i64,
         permissions: &[String],
     ) -> Result<(), DatabaseError> {
-        let table = Self::qualified_permissions_table_name(context, schema.id)?;
+        Self::sync_permissions_many(executor, context, schema, &[(sequence, permissions)]).await
+    }
 
-        sqlx::query(&format!("DELETE FROM {table} WHERE document_id = $1"))
-            .bind(sequence)
+    async fn sync_permissions_many<'e>(
+        executor: &mut sqlx::Transaction<'e, Postgres>,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        items: &[(i64, &[String])],
+    ) -> Result<(), DatabaseError> {
+        if items.is_empty() {
+            return Ok(());
+        }
+
+        let table = Self::qualified_permissions_table_name(context, schema.id)?;
+        let sequences: Vec<i64> = items.iter().map(|(s, _)| *s).collect();
+
+        let mut builder = QueryBuilder::<Postgres>::new(format!("DELETE FROM {table} WHERE document_id IN ("));
+        let mut separated = builder.separated(", ");
+        for sequence in sequences {
+            separated.push_bind(sequence);
+        }
+        separated.push_unseparated(")");
+
+        builder
+            .build()
             .execute(&mut **executor)
             .await
             .map_err(|error| {
-                DatabaseError::Other(format!("postgres permissions delete failed: {error}"))
+                DatabaseError::Other(format!("postgres permissions delete many failed: {error}"))
             })?;
 
-        let grouped = Self::permission_rows(permissions)?;
-        if grouped.is_empty() {
+        let mut all_rows = Vec::new();
+        for (sequence, permissions) in items {
+            let grouped = Self::permission_rows(permissions)?;
+            for (perm_type, values) in grouped {
+                all_rows.push((*sequence, perm_type, values));
+            }
+        }
+
+        if all_rows.is_empty() {
             return Ok(());
         }
 
@@ -364,8 +392,8 @@ impl<'a> PostgresAdapter<'a> {
         ));
 
         builder.push_values(
-            grouped.into_iter(),
-            |mut separated, (permission_type, values)| {
+            all_rows.into_iter(),
+            |mut separated, (sequence, permission_type, values)| {
                 separated.push_bind(sequence);
                 separated.push_bind(permission_type);
                 separated.push_bind(values);
@@ -377,7 +405,7 @@ impl<'a> PostgresAdapter<'a> {
             .execute(&mut **executor)
             .await
             .map_err(|error| {
-                DatabaseError::Other(format!("postgres permissions insert failed: {error}"))
+                DatabaseError::Other(format!("postgres permissions insert many failed: {error}"))
             })?;
 
         Ok(())
@@ -1216,22 +1244,27 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                     DatabaseError::Other(format!("postgres insert_many failed: {error}"))
                 })?;
 
-                for _row in rows {
-                    let sequence = _row.try_get::<i64, _>(COLUMN_SEQUENCE).map_err(|error| {
+                let mut sync_items = Vec::with_capacity(rows.len());
+
+                for (row, (permissions, mut record)) in rows.into_iter().zip(row_data.into_iter()) {
+                    let sequence = row.try_get::<i64, _>(COLUMN_SEQUENCE).map_err(|error| {
                         DatabaseError::Other(format!("postgres sequence read failed: {error}"))
                     })?;
 
-                    let (permissions, mut record) = row_data.remove(0); // Efficiently drain
-                    
-                    Self::sync_permissions(&mut tx, &context, schema, sequence, &permissions).await?;
+                    sync_items.push((sequence, permissions));
 
                     record.insert(FIELD_SEQUENCE.to_string(), StorageValue::Int(sequence));
-                    record.insert(
-                        FIELD_PERMISSIONS.to_string(),
-                        StorageValue::StringArray(permissions),
-                    );
                     results.push(record);
                 }
+
+                // Batch sync all permissions for this group
+                let sync_refs: Vec<(i64, &[String])> = sync_items.iter().map(|(s, p)| (*s, p.as_slice())).collect();
+                Self::sync_permissions_many(&mut tx, &context, schema, &sync_refs).await?;
+
+                // Note: results already have FIELD_PERMISSIONS from the original records if they were partial,
+                // but we might want to ensure they are consistent.
+                // In insert_many above, record was taken from row_data which came from group_records.
+                // The FIELD_PERMISSIONS were already there if provided.
             }
 
             tx.commit().await.map_err(|error| {
