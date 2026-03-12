@@ -1,6 +1,6 @@
-use database::query::{Filter, FilterOp};
-use database::traits::storage::{AdapterFuture, StorageAdapter, StorageRecord, StorageValue};
-use database::{Context, Database, DatabaseError, Field, QuerySpec};
+use nx_db::query::{Filter, FilterOp};
+use nx_db::traits::storage::{AdapterFuture, StorageAdapter, StorageRecord, StorageValue};
+use nx_db::{Context, Database, DatabaseError, Field, QuerySpec};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -35,7 +35,7 @@ impl DisplayName {
 
 mod codecs {
     use super::DisplayName;
-    use database::DatabaseError;
+    use nx_db::DatabaseError;
 
     pub fn encode_display_name(value: DisplayName) -> Result<String, DatabaseError> {
         Ok(format!("stored::{}", value.0.to_ascii_uppercase()))
@@ -50,7 +50,7 @@ mod codecs {
 
 mod resolvers {
     use crate::virtual_app_models;
-    use database::{Context, DatabaseError};
+    use nx_db::{Context, DatabaseError};
 
     pub async fn resolve_profile_label(
         entity: &virtual_app_models::UserEntity,
@@ -73,7 +73,7 @@ impl StorageAdapter for FakeAdapter {
     fn create_collection(
         &self,
         _context: &Context,
-        _schema: &'static database::CollectionSchema,
+        _schema: &'static nx_db::CollectionSchema,
     ) -> AdapterFuture<'_, Result<(), DatabaseError>> {
         Box::pin(async { Ok(()) })
     }
@@ -81,14 +81,14 @@ impl StorageAdapter for FakeAdapter {
     fn insert(
         &self,
         context: &Context,
-        schema: &'static database::CollectionSchema,
+        schema: &'static nx_db::CollectionSchema,
         values: StorageRecord,
     ) -> AdapterFuture<'_, Result<StorageRecord, DatabaseError>> {
         let rows = self.rows.clone();
         let key = (
             context.schema().to_string(),
             schema.id.to_string(),
-            match values.get(database::FIELD_ID) {
+            match values.get(nx_db::FIELD_ID) {
                 Some(StorageValue::String(value)) => value.clone(),
                 _ => return Box::pin(async { Err(DatabaseError::Other("missing id".into())) }),
             },
@@ -103,7 +103,7 @@ impl StorageAdapter for FakeAdapter {
     fn insert_many(
         &self,
         context: &Context,
-        schema: &'static database::CollectionSchema,
+        schema: &'static nx_db::CollectionSchema,
         values: Vec<StorageRecord>,
     ) -> AdapterFuture<'_, Result<Vec<StorageRecord>, DatabaseError>> {
         let rows = self.rows.clone();
@@ -113,7 +113,7 @@ impl StorageAdapter for FakeAdapter {
         Box::pin(async move {
             let mut locked = rows.lock().expect("rows lock");
             for record in &values {
-                let id = match record.get(database::FIELD_ID) {
+                let id = match record.get(nx_db::FIELD_ID) {
                     Some(StorageValue::String(value)) => value.clone(),
                     _ => return Err(DatabaseError::Other("missing id".into())),
                 };
@@ -126,7 +126,7 @@ impl StorageAdapter for FakeAdapter {
     fn get(
         &self,
         context: &Context,
-        schema: &'static database::CollectionSchema,
+        schema: &'static nx_db::CollectionSchema,
         id: &str,
     ) -> AdapterFuture<'_, Result<Option<StorageRecord>, DatabaseError>> {
         let rows = self.rows.clone();
@@ -142,7 +142,7 @@ impl StorageAdapter for FakeAdapter {
     fn update(
         &self,
         context: &Context,
-        schema: &'static database::CollectionSchema,
+        schema: &'static nx_db::CollectionSchema,
         id: &str,
         values: StorageRecord,
     ) -> AdapterFuture<'_, Result<Option<StorageRecord>, DatabaseError>> {
@@ -170,7 +170,7 @@ impl StorageAdapter for FakeAdapter {
     fn delete(
         &self,
         context: &Context,
-        schema: &'static database::CollectionSchema,
+        schema: &'static nx_db::CollectionSchema,
         id: &str,
     ) -> AdapterFuture<'_, Result<bool, DatabaseError>> {
         let rows = self.rows.clone();
@@ -186,7 +186,7 @@ impl StorageAdapter for FakeAdapter {
     fn update_many(
         &self,
         context: &Context,
-        schema: &'static database::CollectionSchema,
+        schema: &'static nx_db::CollectionSchema,
         query: &QuerySpec,
         values: StorageRecord,
     ) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
@@ -224,7 +224,7 @@ impl StorageAdapter for FakeAdapter {
     fn delete_many(
         &self,
         context: &Context,
-        schema: &'static database::CollectionSchema,
+        schema: &'static nx_db::CollectionSchema,
         query: &QuerySpec,
     ) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
         let rows = self.rows.clone();
@@ -257,7 +257,7 @@ impl StorageAdapter for FakeAdapter {
     fn find(
         &self,
         context: &Context,
-        schema: &'static database::CollectionSchema,
+        schema: &'static nx_db::CollectionSchema,
         query: &QuerySpec,
     ) -> AdapterFuture<'_, Result<Vec<StorageRecord>, DatabaseError>> {
         let rows = self.rows.clone();
@@ -287,7 +287,7 @@ impl StorageAdapter for FakeAdapter {
     fn count(
         &self,
         context: &Context,
-        schema: &'static database::CollectionSchema,
+        schema: &'static nx_db::CollectionSchema,
         query: &QuerySpec,
     ) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
         let rows = self.rows.clone();
@@ -423,7 +423,7 @@ fn generated_models_compile_and_work_with_repository_api() {
     let updated = block_on(repo.update(
         &created.id,
         app_models::UpdateUser {
-            email: database::Patch::set(Some("updated@example.com".into())),
+            email: nx_db::Patch::set(Some("updated@example.com".into())),
             ..Default::default()
         },
     ))
@@ -489,7 +489,7 @@ fn generated_filtered_models_apply_encode_decode_hooks() {
     let updated = block_on(repo.update(
         &created.id,
         filtered_app_models::UpdateUser {
-            name: database::Patch::set(DisplayName::new("Kiran")),
+            name: nx_db::Patch::set(DisplayName::new("Kiran")),
             ..Default::default()
         },
     ))

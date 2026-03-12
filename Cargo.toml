@@ -1,7 +1,7 @@
 [workspace]
 members = [
     ".",
-    "nx-core",
+    "database-core",
     "driver-postgres",
     "database-cache",
     "database-codegen",
@@ -14,12 +14,12 @@ resolver = "2"
 edition = "2024"
 
 [package]
-name = "database"
+name = "nx-db"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-nx_core = { path = "nx-core" }
+database-core = { path = "database-core" }
 database-cache = { path = "database-cache" }
 serde = { version = "1.0.228", features = ["derive"] }
 

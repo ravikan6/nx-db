@@ -1,8 +1,8 @@
-use nx_core::errors::DatabaseError;
-use nx_core::query::{Filter, FilterOp, QuerySpec, SortDirection};
-use nx_core::traits::storage::{AdapterFuture, StorageAdapter, StorageRecord, StorageValue};
-use nx_core::utils::{Authorization, AuthorizationContext, Permission, PermissionEnum, Role};
-use nx_core::{
+use database_core::errors::DatabaseError;
+use database_core::query::{Filter, FilterOp, QuerySpec, SortDirection};
+use database_core::traits::storage::{AdapterFuture, StorageAdapter, StorageRecord, StorageValue};
+use database_core::utils::{Authorization, AuthorizationContext, Permission, PermissionEnum, Role};
+use database_core::{
     AttributeKind, COLUMN_CREATED_AT, COLUMN_ID, COLUMN_PERMISSIONS, COLUMN_SEQUENCE,
     COLUMN_UPDATED_AT, CollectionSchema, Context, FIELD_CREATED_AT, FIELD_ID, FIELD_PERMISSIONS,
     FIELD_SEQUENCE, FIELD_UPDATED_AT, IndexKind, Order,
@@ -80,7 +80,7 @@ impl<'a> PostgresAdapter<'a> {
 
     fn persisted_attributes(
         schema: &'static CollectionSchema,
-    ) -> Vec<&'static nx_core::AttributeSchema> {
+    ) -> Vec<&'static database_core::AttributeSchema> {
         schema.persisted_attributes().collect()
     }
 
@@ -764,7 +764,7 @@ impl<'a> PostgresAdapter<'a> {
         values: &StorageRecord,
         permissions_update: bool,
         permissions: &[String],
-        attributes: &[&'static nx_core::AttributeSchema],
+        attributes: &[&'static database_core::AttributeSchema],
     ) -> Result<(), DatabaseError> {
         let mut first = true;
 
@@ -1660,9 +1660,9 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
 #[cfg(test)]
 mod tests {
     use super::PostgresAdapter;
-    use nx_core::errors::DatabaseError;
-    use nx_core::utils::{PermissionEnum, Role};
-    use nx_core::{
+    use database_core::errors::DatabaseError;
+    use database_core::utils::{PermissionEnum, Role};
+    use database_core::{
         AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context,
     };
     use sqlx::{Execute, Postgres, QueryBuilder};

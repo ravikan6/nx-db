@@ -79,21 +79,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             validate_project_spec(&spec)?;
 
             let pool = sqlx::PgPool::connect(&url).await?;
-            let engine = database::migration::MigrationEngine::new(&pool);
-            let context = database::Context::default().with_schema(&schema);
+            let engine = nx_db::postgres::migration::MigrationEngine::new(&pool);
+            let context = nx_db::Context::default().with_schema(&schema);
 
-            let collections: Vec<&dyn database::traits::migration::MigrationCollection> = spec.collections
+            let collections: Vec<&dyn nx_db::traits::migration::MigrationCollection> = spec.collections
                 .iter()
-                .map(|c| c as &dyn database::traits::migration::MigrationCollection)
+                .map(|c| c as &dyn nx_db::traits::migration::MigrationCollection)
                 .collect();
 
             // Ensure schema exists
-            let quoted_schema = database::PostgresAdapter::quote_identifier(&schema)?;
+            let quoted_schema = nx_db::postgres::PostgresAdapter::quote_identifier(&schema)?;
             sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {}", quoted_schema))
                 .execute(&pool)
                 .await?;
 
-            let changes: Vec<database::migration::MigrationChange> = engine.diff(&context, &collections).await?;
+            let changes: Vec<nx_db::postgres::migration::MigrationChange> = engine.diff(&context, &collections).await?;
 
             if changes.is_empty() {
                 println!("Database is up to date.");
@@ -103,16 +103,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("Pending changes:");
             for change in &changes {
                 match change {
-                    database::migration::MigrationChange::CreateTable(id) => {
+                    nx_db::postgres::migration::MigrationChange::CreateTable(id) => {
                         println!("  - Create table {}", id);
                     }
-                    database::migration::MigrationChange::AddColumn { table, column, sql_type, .. } => {
+                    nx_db::postgres::migration::MigrationChange::AddColumn { table, column, sql_type, .. } => {
                         println!("  - Add column {}.{} ({})", table, column, sql_type);
                     }
-                    database::migration::MigrationChange::CreateIndex { index_id, .. } => {
+                    nx_db::postgres::migration::MigrationChange::CreateIndex { index_id, .. } => {
                         println!("  - Create index {}", index_id);
                     }
-                    database::migration::MigrationChange::DropIndex { index_id, .. } => {
+                    nx_db::postgres::migration::MigrationChange::DropIndex { index_id, .. } => {
                         println!("  - Drop index {}", index_id);
                     }
                 }

@@ -1,9 +1,10 @@
-mod context;
-mod database;
-mod enums;
+pub mod context;
+pub mod database;
+pub mod enums;
 pub mod errors;
 pub mod events;
 pub mod key;
+pub mod macros;
 pub mod model;
 pub mod query;
 pub mod registry;
@@ -15,7 +16,7 @@ pub mod utils;
 pub mod value;
 
 pub use context::*;
-pub use database::*;
+pub use crate::database::*;
 pub use enums::*;
 pub use errors::*;
 pub use events::*;

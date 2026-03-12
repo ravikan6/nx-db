@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-nx_core = { path = "../nx-core" }
+database-core = { path = "../database-core" }
 sqlx = { version = "0.8.6", features = ["postgres", "time", "json"] }
 serde = { version = "1.0.228" }
 serde_json = { version = "1.0.133" }

@@ -2,8 +2,8 @@
 // Do not edit by hand.
 
 pub mod filtered_app_models {
-    use database::traits::storage::StorageRecord;
-    use database::{insert_value, take_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, EncodedField, Field, Key, Model, Patch, StaticRegistry};
+    use nx_db::traits::storage::StorageRecord;
+    use nx_db::{insert_value, take_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, EncodedField, Field, Key, Model, Patch, StaticRegistry};
 
     pub type UserId = Key<32>;
 
@@ -31,7 +31,7 @@ pub mod filtered_app_models {
     pub struct User;
     pub const USER: User = User;
 
-    pub const USER_ID: Field<User, UserId> = Field::new(database::FIELD_ID);
+    pub const USER_ID: Field<User, UserId> = Field::new(nx_db::FIELD_ID);
     pub const USER_NAME: EncodedField<User, crate::DisplayName> = EncodedField::new("name", encode_query_user_name);
     pub const USER_ACTIVE: Field<User, bool> = Field::new("active");
 
@@ -40,8 +40,8 @@ pub mod filtered_app_models {
         Ok(value)
     }
 
-    fn encode_query_user_name(value: crate::DisplayName) -> Result<database::traits::storage::StorageValue, DatabaseError> {
-        Ok(database::IntoStorage::into_storage(encode_user_name(value)?))
+    fn encode_query_user_name(value: crate::DisplayName) -> Result<nx_db::traits::storage::StorageValue, DatabaseError> {
+        Ok(nx_db::IntoStorage::into_storage(encode_user_name(value)?))
     }
 
     fn decode_user_name(value: String) -> Result<crate::DisplayName, DatabaseError> {
@@ -72,7 +72,7 @@ pub mod filtered_app_models {
         },
     ];
 
-    const USERS_INDEXES: &[database::IndexSchema] = &[
+    const USERS_INDEXES: &[nx_db::IndexSchema] = &[
     ];
 
     pub static USERS_SCHEMA: CollectionSchema = CollectionSchema {
@@ -101,7 +101,7 @@ pub mod filtered_app_models {
 
         fn create_to_record(input: Self::Create, _context: &Context) -> Result<StorageRecord, DatabaseError> {
             let mut record = StorageRecord::new();
-            insert_value(&mut record, database::FIELD_ID, input.id);
+            insert_value(&mut record, nx_db::FIELD_ID, input.id);
             insert_value(&mut record, "name", encode_user_name(input.name)?);
             insert_value(&mut record, "active", input.active);
             Ok(record)
@@ -116,7 +116,7 @@ pub mod filtered_app_models {
 
         fn entity_from_record(mut record: StorageRecord, _context: &Context) -> Result<Self::Entity, DatabaseError> {
             Ok(UserEntity {
-                id: take_required(&mut record, database::FIELD_ID)?,
+                id: take_required(&mut record, nx_db::FIELD_ID)?,
                 name: decode_user_name(take_required::<String>(&mut record, "name")?)?,
                 active: take_required(&mut record, "active")?,
             })

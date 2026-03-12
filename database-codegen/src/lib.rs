@@ -441,7 +441,7 @@ pub fn generate(spec: &ProjectSpec) -> Result<String, CodegenError> {
     writeln!(&mut out, "pub mod {module_name} {{").unwrap();
     writeln!(
         &mut out,
-        "    use database::traits::storage::StorageRecord;"
+        "    use nx_db::traits::storage::StorageRecord;"
     )
     .unwrap();
     let needs_model_future = spec.collections.iter().any(|collection| {
@@ -460,7 +460,7 @@ pub fn generate(spec: &ProjectSpec) -> Result<String, CodegenError> {
 
     writeln!(
         &mut out,
-        "    use database::{{insert_value, {}take_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, {}Field, Key, Model, Patch, StaticRegistry}};",
+        "    use nx_db::{{insert_value, {}take_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, {}Field, Key, Model, Patch, StaticRegistry}};",
         if needs_take_optional {
             "take_optional, "
         } else {
@@ -595,7 +595,7 @@ fn emit_collection(
 
     writeln!(
         out,
-        "    pub const {model_const}_ID: Field<{model_name}, {id_name}> = Field::new(database::FIELD_ID);"
+        "    pub const {model_const}_ID: Field<{model_name}, {id_name}> = Field::new(nx_db::FIELD_ID);"
     )
     .unwrap();
     let filters_by_name: BTreeMap<&str, &FilterSpec> = spec
@@ -656,13 +656,13 @@ fn emit_collection(
 
         writeln!(
             out,
-            "    fn {query_encode_fn}(value: {}) -> Result<database::traits::storage::StorageValue, DatabaseError> {{",
+            "    fn {query_encode_fn}(value: {}) -> Result<nx_db::traits::storage::StorageValue, DatabaseError> {{",
             helpers.public_type
         )
         .unwrap();
         writeln!(
             out,
-            "        Ok(database::IntoStorage::into_storage({encode_fn}(value)?))"
+            "        Ok(nx_db::IntoStorage::into_storage({encode_fn}(value)?))"
         )
         .unwrap();
         writeln!(out, "    }}").unwrap();
@@ -722,7 +722,7 @@ fn emit_collection(
         )
         .unwrap();
         if let Some(rel) = &attribute.relationship {
-            writeln!(out, "            relationship: Some(database::RelationshipSchema {{").unwrap();
+            writeln!(out, "            relationship: Some(nx_db::RelationshipSchema {{").unwrap();
             writeln!(out, "                related_collection: \"{}\",", rel.related_collection).unwrap();
             writeln!(out, "                kind: {},", relationship_kind_expr(rel.kind)).unwrap();
             writeln!(out, "                side: {},", relationship_side_expr(rel.side)).unwrap();
@@ -748,11 +748,11 @@ fn emit_collection(
 
     writeln!(
         out,
-        "    const {indexes_const}: &[database::IndexSchema] = &["
+        "    const {indexes_const}: &[nx_db::IndexSchema] = &["
     )
     .unwrap();
     for index in &collection.indexes {
-        writeln!(out, "        database::IndexSchema {{").unwrap();
+        writeln!(out, "        nx_db::IndexSchema {{").unwrap();
         writeln!(out, "            id: \"{}\",", escape_string(&index.id)).unwrap();
         writeln!(out, "            kind: {},", index_kind_expr(index.kind)).unwrap();
         writeln!(
@@ -820,7 +820,7 @@ fn emit_collection(
     writeln!(out, "    impl {model_name} {{").unwrap();
     writeln!(
         out,
-        "        pub const ID: Field<{model_name}, {id_name}> = Field::new(database::FIELD_ID);"
+        "        pub const ID: Field<{model_name}, {id_name}> = Field::new(nx_db::FIELD_ID);"
     )
     .unwrap();
     for attribute in &collection.attributes {
@@ -879,12 +879,12 @@ fn emit_collection(
     writeln!(out, "            let mut record = StorageRecord::new();").unwrap();
     writeln!(
         out,
-        "            insert_value(&mut record, database::FIELD_ID, input.id);"
+        "            insert_value(&mut record, nx_db::FIELD_ID, input.id);"
     )
     .unwrap();
     writeln!(
         out,
-        "            insert_value(&mut record, database::FIELD_PERMISSIONS, input.permissions);"
+        "            insert_value(&mut record, nx_db::FIELD_PERMISSIONS, input.permissions);"
     )
     .unwrap();
     for attribute in &collection.attributes {
@@ -931,7 +931,7 @@ fn emit_collection(
     )
     .unwrap();
     writeln!(out, "            let mut record = StorageRecord::new();").unwrap();
-    writeln!(out, "            if let Patch::Set(value) = input.permissions {{ insert_value(&mut record, database::FIELD_PERMISSIONS, value); }}").unwrap();
+    writeln!(out, "            if let Patch::Set(value) = input.permissions {{ insert_value(&mut record, nx_db::FIELD_PERMISSIONS, value); }}").unwrap();
     for attribute in &collection.attributes {
         if attribute.kind == AttributeKindSpec::Virtual {
             continue;
@@ -961,7 +961,7 @@ fn emit_collection(
     writeln!(out, "            Ok({entity_name} {{").unwrap();
     writeln!(
         out,
-        "                id: take_required(&mut record, database::FIELD_ID)?,"
+        "                id: take_required(&mut record, nx_db::FIELD_ID)?,"
     )
     .unwrap();
     for attribute in &collection.attributes {
@@ -1056,42 +1056,42 @@ fn attribute_kind_expr(kind: AttributeKindSpec) -> &'static str {
 
 fn index_kind_expr(kind: IndexKindSpec) -> &'static str {
     match kind {
-        IndexKindSpec::Key => "database::IndexKind::Key",
-        IndexKindSpec::Unique => "database::IndexKind::Unique",
-        IndexKindSpec::FullText => "database::IndexKind::FullText",
-        IndexKindSpec::Spatial => "database::IndexKind::Spatial",
+        IndexKindSpec::Key => "nx_db::IndexKind::Key",
+        IndexKindSpec::Unique => "nx_db::IndexKind::Unique",
+        IndexKindSpec::FullText => "nx_db::IndexKind::FullText",
+        IndexKindSpec::Spatial => "nx_db::IndexKind::Spatial",
     }
 }
 
 fn order_expr(order: OrderSpec) -> &'static str {
     match order {
-        OrderSpec::Asc => "database::Order::Asc",
-        OrderSpec::Desc => "database::Order::Desc",
-        OrderSpec::None => "database::Order::None",
+        OrderSpec::Asc => "nx_db::Order::Asc",
+        OrderSpec::Desc => "nx_db::Order::Desc",
+        OrderSpec::None => "nx_db::Order::None",
     }
 }
 
 fn relationship_kind_expr(kind: RelationshipKindSpec) -> &'static str {
     match kind {
-        RelationshipKindSpec::OneToOne => "database::RelationshipKind::OneToOne",
-        RelationshipKindSpec::OneToMany => "database::RelationshipKind::OneToMany",
-        RelationshipKindSpec::ManyToOne => "database::RelationshipKind::ManyToOne",
-        RelationshipKindSpec::ManyToMany => "database::RelationshipKind::ManyToMany",
+        RelationshipKindSpec::OneToOne => "nx_db::RelationshipKind::OneToOne",
+        RelationshipKindSpec::OneToMany => "nx_db::RelationshipKind::OneToMany",
+        RelationshipKindSpec::ManyToOne => "nx_db::RelationshipKind::ManyToOne",
+        RelationshipKindSpec::ManyToMany => "nx_db::RelationshipKind::ManyToMany",
     }
 }
 
 fn relationship_side_expr(side: RelationshipSideSpec) -> &'static str {
     match side {
-        RelationshipSideSpec::Parent => "database::RelationshipSide::Parent",
-        RelationshipSideSpec::Child => "database::RelationshipSide::Child",
+        RelationshipSideSpec::Parent => "nx_db::RelationshipSide::Parent",
+        RelationshipSideSpec::Child => "nx_db::RelationshipSide::Child",
     }
 }
 
 fn on_delete_action_expr(action: OnDeleteActionSpec) -> &'static str {
     match action {
-        OnDeleteActionSpec::SetNull => "database::OnDeleteAction::SetNull",
-        OnDeleteActionSpec::Cascade => "database::OnDeleteAction::Cascade",
-        OnDeleteActionSpec::Restrict => "database::OnDeleteAction::Restrict",
+        OnDeleteActionSpec::SetNull => "nx_db::OnDeleteAction::SetNull",
+        OnDeleteActionSpec::Cascade => "nx_db::OnDeleteAction::Cascade",
+        OnDeleteActionSpec::Restrict => "nx_db::OnDeleteAction::Restrict",
     }
 }
 
@@ -1101,7 +1101,7 @@ fn storage_field_base_type(kind: AttributeKindSpec, array: bool) -> String {
         AttributeKindSpec::Integer => "i64",
         AttributeKindSpec::Float => "f64",
         AttributeKindSpec::Boolean => "bool",
-        AttributeKindSpec::Timestamp => "database::time::OffsetDateTime",
+        AttributeKindSpec::Timestamp => "nx_db::time::OffsetDateTime",
         AttributeKindSpec::Virtual | AttributeKindSpec::Json => "String",
     };
 
@@ -1353,45 +1353,45 @@ fn escape_string(value: &str) -> String {
     value.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-impl nx_core::traits::migration::MigrationCollection for CollectionSpec {
+impl database_core::traits::migration::MigrationCollection for CollectionSpec {
     fn id(&self) -> &str { &self.id }
-    fn attributes(&self) -> Vec<nx_core::traits::migration::MigrationAttribute> {
-        self.attributes.iter().map(|a| nx_core::traits::migration::MigrationAttribute {
+    fn attributes(&self) -> Vec<database_core::traits::migration::MigrationAttribute> {
+        self.attributes.iter().map(|a| database_core::traits::migration::MigrationAttribute {
             id: a.id.clone(),
             column: a.column.clone().unwrap_or_else(|| a.id.clone()),
             kind: match a.kind {
-                AttributeKindSpec::String => nx_core::AttributeKind::String,
-                AttributeKindSpec::Integer => nx_core::AttributeKind::Integer,
-                AttributeKindSpec::Float => nx_core::AttributeKind::Float,
-                AttributeKindSpec::Boolean => nx_core::AttributeKind::Boolean,
-                AttributeKindSpec::Timestamp => nx_core::AttributeKind::Timestamp,
-                AttributeKindSpec::Relationship => nx_core::AttributeKind::Relationship,
-                AttributeKindSpec::Virtual => nx_core::AttributeKind::Virtual,
-                AttributeKindSpec::Json => nx_core::AttributeKind::Json,
+                AttributeKindSpec::String => database_core::AttributeKind::String,
+                AttributeKindSpec::Integer => database_core::AttributeKind::Integer,
+                AttributeKindSpec::Float => database_core::AttributeKind::Float,
+                AttributeKindSpec::Boolean => database_core::AttributeKind::Boolean,
+                AttributeKindSpec::Timestamp => database_core::AttributeKind::Timestamp,
+                AttributeKindSpec::Relationship => database_core::AttributeKind::Relationship,
+                AttributeKindSpec::Virtual => database_core::AttributeKind::Virtual,
+                AttributeKindSpec::Json => database_core::AttributeKind::Json,
             },
             required: a.required,
             array: a.array,
             persistence: if a.kind == AttributeKindSpec::Virtual {
-                nx_core::AttributePersistence::Virtual
+                database_core::AttributePersistence::Virtual
             } else {
-                nx_core::AttributePersistence::Persisted
+                database_core::AttributePersistence::Persisted
             },
         }).collect()
     }
-    fn indexes(&self) -> Vec<nx_core::traits::migration::MigrationIndex> {
-        self.indexes.iter().map(|i| nx_core::traits::migration::MigrationIndex {
+    fn indexes(&self) -> Vec<database_core::traits::migration::MigrationIndex> {
+        self.indexes.iter().map(|i| database_core::traits::migration::MigrationIndex {
             id: i.id.clone(),
             kind: match i.kind {
-                IndexKindSpec::Key => nx_core::IndexKind::Key,
-                IndexKindSpec::Unique => nx_core::IndexKind::Unique,
-                IndexKindSpec::FullText => nx_core::IndexKind::FullText,
-                IndexKindSpec::Spatial => nx_core::IndexKind::Spatial,
+                IndexKindSpec::Key => database_core::IndexKind::Key,
+                IndexKindSpec::Unique => database_core::IndexKind::Unique,
+                IndexKindSpec::FullText => database_core::IndexKind::FullText,
+                IndexKindSpec::Spatial => database_core::IndexKind::Spatial,
             },
             attributes: i.attributes.clone(),
             orders: i.orders.iter().map(|o| match o {
-                OrderSpec::Asc => nx_core::Order::Asc,
-                OrderSpec::Desc => nx_core::Order::Desc,
-                OrderSpec::None => nx_core::Order::None,
+                OrderSpec::Asc => database_core::Order::Asc,
+                OrderSpec::Desc => database_core::Order::Desc,
+                OrderSpec::None => database_core::Order::None,
             }).collect(),
         }).collect()
     }
@@ -1467,12 +1467,12 @@ mod tests {
         assert!(
             output.contains("pub const USER_NAME: EncodedField<User, crate::codecs::DisplayName>")
         );
-        assert!(output.contains("fn encode_query_user_name(value: crate::codecs::DisplayName) -> Result<database::traits::storage::StorageValue, DatabaseError>"));
+        assert!(output.contains("fn encode_query_user_name(value: crate::codecs::DisplayName) -> Result<nx_db::traits::storage::StorageValue, DatabaseError>"));
         assert!(output.contains("persistence: AttributePersistence::Virtual"));
-        assert!(output.contains("const USERS_INDEXES: &[database::IndexSchema] = &["));
+        assert!(output.contains("const USERS_INDEXES: &[nx_db::IndexSchema] = &["));
         assert!(output.contains("id: \"users_name_idx\""));
-        assert!(output.contains("kind: database::IndexKind::Key"));
-        assert!(output.contains("orders: &[database::Order::Asc]"));
+        assert!(output.contains("kind: nx_db::IndexKind::Key"));
+        assert!(output.contains("orders: &[nx_db::Order::Asc]"));
         assert!(output.contains("fn resolve_entity<'a>(mut entity: Self::Entity, context: &'a Context) -> ModelFuture<'a, Result<Self::Entity, DatabaseError>>"));
         assert!(output.contains("entity.profile_label = Some(crate::resolvers::resolve_profile_label(&entity, context).await?);"));
         assert!(output.contains("pub fn registry() -> Result<StaticRegistry, DatabaseError>"));

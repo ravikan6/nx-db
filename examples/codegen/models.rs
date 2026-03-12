@@ -2,8 +2,8 @@
 // Do not edit by hand.
 
 pub mod app_models {
-    use database::traits::storage::StorageRecord;
-    use database::{insert_value, take_optional, take_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, Field, Key, Model, Patch, StaticRegistry};
+    use nx_db::traits::storage::StorageRecord;
+    use nx_db::{insert_value, take_optional, take_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, Field, Key, Model, Patch, StaticRegistry};
 
     pub type UserId = Key<32>;
 
@@ -34,7 +34,7 @@ pub mod app_models {
     pub struct User;
     pub const USER: User = User;
 
-    pub const USER_ID: Field<User, UserId> = Field::new(database::FIELD_ID);
+    pub const USER_ID: Field<User, UserId> = Field::new(nx_db::FIELD_ID);
     pub const USER_NAME: Field<User, String> = Field::new("name");
     pub const USER_EMAIL: Field<User, Option<String>> = Field::new("email");
     pub const USER_ACTIVE: Field<User, bool> = Field::new("active");
@@ -72,18 +72,18 @@ pub mod app_models {
         },
     ];
 
-    const USERS_INDEXES: &[database::IndexSchema] = &[
-        database::IndexSchema {
+    const USERS_INDEXES: &[nx_db::IndexSchema] = &[
+        nx_db::IndexSchema {
             id: "users_email_unique",
-            kind: database::IndexKind::Unique,
+            kind: nx_db::IndexKind::Unique,
             attributes: &["email"],
             orders: &[],
         },
-        database::IndexSchema {
+        nx_db::IndexSchema {
             id: "users_name_active_idx",
-            kind: database::IndexKind::Key,
+            kind: nx_db::IndexKind::Key,
             attributes: &["name", "active"],
-            orders: &[database::Order::Asc, database::Order::Desc],
+            orders: &[nx_db::Order::Asc, nx_db::Order::Desc],
         },
     ];
 
@@ -113,7 +113,7 @@ pub mod app_models {
 
         fn create_to_record(input: Self::Create, _context: &Context) -> Result<StorageRecord, DatabaseError> {
             let mut record = StorageRecord::new();
-            insert_value(&mut record, database::FIELD_ID, input.id);
+            insert_value(&mut record, nx_db::FIELD_ID, input.id);
             insert_value(&mut record, "name", input.name);
             if let Some(value) = input.email { insert_value(&mut record, "email", value); }
             insert_value(&mut record, "active", input.active);
@@ -130,7 +130,7 @@ pub mod app_models {
 
         fn entity_from_record(mut record: StorageRecord, _context: &Context) -> Result<Self::Entity, DatabaseError> {
             Ok(UserEntity {
-                id: take_required(&mut record, database::FIELD_ID)?,
+                id: take_required(&mut record, nx_db::FIELD_ID)?,
                 name: take_required(&mut record, "name")?,
                 email: take_optional(&mut record, "email")?,
                 active: take_required(&mut record, "active")?,
@@ -167,7 +167,7 @@ pub mod app_models {
     pub struct Session;
     pub const SESSION: Session = Session;
 
-    pub const SESSION_ID: Field<Session, SessionId> = Field::new(database::FIELD_ID);
+    pub const SESSION_ID: Field<Session, SessionId> = Field::new(nx_db::FIELD_ID);
     pub const SESSION_USER_ID: Field<Session, String> = Field::new("userId");
     pub const SESSION_TOKEN: Field<Session, String> = Field::new("token");
     pub const SESSION_REVOKED: Field<Session, bool> = Field::new("revoked");
@@ -205,12 +205,12 @@ pub mod app_models {
         },
     ];
 
-    const SESSIONS_INDEXES: &[database::IndexSchema] = &[
-        database::IndexSchema {
+    const SESSIONS_INDEXES: &[nx_db::IndexSchema] = &[
+        nx_db::IndexSchema {
             id: "sessions_user_token_idx",
-            kind: database::IndexKind::Key,
+            kind: nx_db::IndexKind::Key,
             attributes: &["userId", "token"],
-            orders: &[database::Order::Asc, database::Order::Asc],
+            orders: &[nx_db::Order::Asc, nx_db::Order::Asc],
         },
     ];
 
@@ -240,7 +240,7 @@ pub mod app_models {
 
         fn create_to_record(input: Self::Create, _context: &Context) -> Result<StorageRecord, DatabaseError> {
             let mut record = StorageRecord::new();
-            insert_value(&mut record, database::FIELD_ID, input.id);
+            insert_value(&mut record, nx_db::FIELD_ID, input.id);
             insert_value(&mut record, "userId", input.user_id);
             insert_value(&mut record, "token", input.token);
             insert_value(&mut record, "revoked", input.revoked);
@@ -257,7 +257,7 @@ pub mod app_models {
 
         fn entity_from_record(mut record: StorageRecord, _context: &Context) -> Result<Self::Entity, DatabaseError> {
             Ok(SessionEntity {
-                id: take_required(&mut record, database::FIELD_ID)?,
+                id: take_required(&mut record, nx_db::FIELD_ID)?,
                 user_id: take_required(&mut record, "userId")?,
                 token: take_required(&mut record, "token")?,
                 revoked: take_required(&mut record, "revoked")?,

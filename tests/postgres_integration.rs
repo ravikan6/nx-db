@@ -1,8 +1,8 @@
 #![cfg(feature = "postgres")]
 
-use database::PostgresAdapter;
-use database::traits::storage::StorageRecord;
-use database::{
+use nx_db::PostgresAdapter;
+use nx_db::traits::storage::StorageRecord;
+use nx_db::{
     AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, Database,
     DatabaseError, FIELD_PERMISSIONS, Key, Model, QuerySpec, Role, insert_value, take_required,
 };
@@ -60,7 +60,7 @@ struct CreateRestrictedUser {
 
 #[derive(Debug, Clone, Default)]
 struct UpdateRestrictedUser {
-    name: database::Patch<String>,
+    name: nx_db::Patch<String>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -85,7 +85,7 @@ impl Model for RestrictedUser {
         _context: &Context,
     ) -> Result<StorageRecord, DatabaseError> {
         let mut record = StorageRecord::new();
-        insert_value(&mut record, database::FIELD_ID, input.id);
+        insert_value(&mut record, nx_db::FIELD_ID, input.id);
         insert_value(&mut record, "name", input.name);
         insert_value(&mut record, FIELD_PERMISSIONS, input.permissions);
         Ok(record)
@@ -96,7 +96,7 @@ impl Model for RestrictedUser {
         _context: &Context,
     ) -> Result<StorageRecord, DatabaseError> {
         let mut record = StorageRecord::new();
-        if let database::Patch::Set(value) = input.name {
+        if let nx_db::Patch::Set(value) = input.name {
             insert_value(&mut record, "name", value);
         }
         Ok(record)
@@ -107,7 +107,7 @@ impl Model for RestrictedUser {
         _context: &Context,
     ) -> Result<Self::Entity, DatabaseError> {
         Ok(RestrictedUserEntity {
-            id: take_required(&mut record, database::FIELD_ID)?,
+            id: take_required(&mut record, nx_db::FIELD_ID)?,
             name: take_required(&mut record, "name")?,
         })
     }
@@ -221,7 +221,7 @@ async fn actual_postgres_repo_flow_and_document_security() -> Result<(), Box<dyn
             .update(
                 &created.id,
                 app_models::UpdateUser {
-                    email: database::Patch::set(Some("updated@example.com".into())),
+                    email: nx_db::Patch::set(Some("updated@example.com".into())),
                     ..Default::default()
                 },
             )
@@ -297,7 +297,7 @@ async fn actual_postgres_repo_flow_and_document_security() -> Result<(), Box<dyn
             .update(
                 &Key::<32>::new("doc_reader").expect("valid id"),
                 UpdateRestrictedUser {
-                    name: database::Patch::set("Updated By Reader".to_string()),
+                    name: nx_db::Patch::set("Updated By Reader".to_string()),
                 },
             )
             .await?;
@@ -307,7 +307,7 @@ async fn actual_postgres_repo_flow_and_document_security() -> Result<(), Box<dyn
             .update(
                 &Key::<32>::new("doc_other").expect("valid id"),
                 UpdateRestrictedUser {
-                    name: database::Patch::set("Denied".to_string()),
+                    name: nx_db::Patch::set("Denied".to_string()),
                 },
             )
             .await?;

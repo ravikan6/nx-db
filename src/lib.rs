@@ -1,13 +1,20 @@
 pub use database_cache as cache;
-pub use nx_core::*;
+pub use database_core as core;
+pub use core::*;
 
 #[cfg(feature = "postgres")]
-pub use driver_postgres as postgres;
-
-#[cfg(feature = "postgres")]
-pub use driver_postgres::PostgresAdapter;
-
-#[cfg(feature = "postgres")]
-pub mod migration {
-    pub use driver_postgres::migration::*;
+pub mod postgres {
+    pub use driver_postgres::PostgresAdapter;
+    pub mod migration {
+        pub use driver_postgres::migration::*;
+    }
 }
+
+pub mod prelude {
+    pub use crate::core::{
+        Context, Database, Key, Model, QuerySpec, Repository, Role,
+    };
+    #[cfg(feature = "postgres")]
+    pub use crate::postgres::PostgresAdapter;
+}
+

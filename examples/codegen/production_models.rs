@@ -2,8 +2,8 @@
 // Do not edit by hand.
 
 pub mod prod_models {
-    use database::traits::storage::StorageRecord;
-    use database::{insert_value, take_optional, take_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, Field, Key, Model, Patch, StaticRegistry};
+    use nx_db::traits::storage::StorageRecord;
+    use nx_db::{insert_value, take_optional, take_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, Field, Key, Model, Patch, StaticRegistry};
 
     pub type UserId = Key<32>;
 
@@ -36,7 +36,7 @@ pub mod prod_models {
     pub struct User;
     pub const USER: User = User;
 
-    pub const USER_ID: Field<User, UserId> = Field::new(database::FIELD_ID);
+    pub const USER_ID: Field<User, UserId> = Field::new(nx_db::FIELD_ID);
     pub const USER_NAME: Field<User, String> = Field::new("name");
     pub const USER_EMAIL: Field<User, String> = Field::new("email");
     pub const USER_METADATA: Field<User, Option<String>> = Field::new("metadata");
@@ -74,10 +74,10 @@ pub mod prod_models {
         },
     ];
 
-    const USERS_INDEXES: &[database::IndexSchema] = &[
-        database::IndexSchema {
+    const USERS_INDEXES: &[nx_db::IndexSchema] = &[
+        nx_db::IndexSchema {
             id: "users_email_unique",
-            kind: database::IndexKind::Unique,
+            kind: nx_db::IndexKind::Unique,
             attributes: &["email"],
             orders: &[],
         },
@@ -94,7 +94,7 @@ pub mod prod_models {
     };
 
     impl User {
-        pub const ID: Field<User, UserId> = Field::new(database::FIELD_ID);
+        pub const ID: Field<User, UserId> = Field::new(nx_db::FIELD_ID);
         pub const NAME: Field<User, String> = Field::new("name");
         pub const EMAIL: Field<User, String> = Field::new("email");
         pub const METADATA: Field<User, Option<String>> = Field::new("metadata");
@@ -116,8 +116,8 @@ pub mod prod_models {
 
         fn create_to_record(input: Self::Create, _context: &Context) -> Result<StorageRecord, DatabaseError> {
             let mut record = StorageRecord::new();
-            insert_value(&mut record, database::FIELD_ID, input.id);
-            insert_value(&mut record, database::FIELD_PERMISSIONS, input.permissions);
+            insert_value(&mut record, nx_db::FIELD_ID, input.id);
+            insert_value(&mut record, nx_db::FIELD_PERMISSIONS, input.permissions);
             insert_value(&mut record, "name", input.name);
             insert_value(&mut record, "email", input.email);
             if let Some(value) = input.metadata { insert_value(&mut record, "metadata", value); }
@@ -126,7 +126,7 @@ pub mod prod_models {
 
         fn update_to_record(input: Self::Update, _context: &Context) -> Result<StorageRecord, DatabaseError> {
             let mut record = StorageRecord::new();
-            if let Patch::Set(value) = input.permissions { insert_value(&mut record, database::FIELD_PERMISSIONS, value); }
+            if let Patch::Set(value) = input.permissions { insert_value(&mut record, nx_db::FIELD_PERMISSIONS, value); }
             if let Patch::Set(value) = input.name { insert_value(&mut record, "name", value); }
             if let Patch::Set(value) = input.email { insert_value(&mut record, "email", value); }
             if let Patch::Set(value) = input.metadata { insert_value(&mut record, "metadata", value); }
@@ -135,7 +135,7 @@ pub mod prod_models {
 
         fn entity_from_record(mut record: StorageRecord, _context: &Context) -> Result<Self::Entity, DatabaseError> {
             Ok(UserEntity {
-                id: take_required(&mut record, database::FIELD_ID)?,
+                id: take_required(&mut record, nx_db::FIELD_ID)?,
                 name: take_required(&mut record, "name")?,
                 email: take_required(&mut record, "email")?,
                 metadata: take_optional(&mut record, "metadata")?,
@@ -174,7 +174,7 @@ pub mod prod_models {
     pub struct Post;
     pub const POST: Post = Post;
 
-    pub const POST_ID: Field<Post, PostId> = Field::new(database::FIELD_ID);
+    pub const POST_ID: Field<Post, PostId> = Field::new(nx_db::FIELD_ID);
     pub const POST_TITLE: Field<Post, String> = Field::new("title");
     pub const POST_CONTENT: Field<Post, Option<String>> = Field::new("content");
     pub const POST_AUTHOR: Field<Post, String> = Field::new("author");
@@ -208,18 +208,18 @@ pub mod prod_models {
             array: false,
             persistence: AttributePersistence::Persisted,
             filters: &[],
-            relationship: Some(database::RelationshipSchema {
+            relationship: Some(nx_db::RelationshipSchema {
                 related_collection: "users",
-                kind: database::RelationshipKind::ManyToOne,
-                side: database::RelationshipSide::Parent,
+                kind: nx_db::RelationshipKind::ManyToOne,
+                side: nx_db::RelationshipSide::Parent,
                 two_way: false,
                 two_way_key: None,
-                on_delete: database::OnDeleteAction::Restrict,
+                on_delete: nx_db::OnDeleteAction::Restrict,
             }),
         },
     ];
 
-    const POSTS_INDEXES: &[database::IndexSchema] = &[
+    const POSTS_INDEXES: &[nx_db::IndexSchema] = &[
     ];
 
     pub static POSTS_SCHEMA: CollectionSchema = CollectionSchema {
@@ -233,7 +233,7 @@ pub mod prod_models {
     };
 
     impl Post {
-        pub const ID: Field<Post, PostId> = Field::new(database::FIELD_ID);
+        pub const ID: Field<Post, PostId> = Field::new(nx_db::FIELD_ID);
         pub const TITLE: Field<Post, String> = Field::new("title");
         pub const CONTENT: Field<Post, Option<String>> = Field::new("content");
         pub const AUTHOR: Field<Post, String> = Field::new("author");
@@ -255,8 +255,8 @@ pub mod prod_models {
 
         fn create_to_record(input: Self::Create, _context: &Context) -> Result<StorageRecord, DatabaseError> {
             let mut record = StorageRecord::new();
-            insert_value(&mut record, database::FIELD_ID, input.id);
-            insert_value(&mut record, database::FIELD_PERMISSIONS, input.permissions);
+            insert_value(&mut record, nx_db::FIELD_ID, input.id);
+            insert_value(&mut record, nx_db::FIELD_PERMISSIONS, input.permissions);
             insert_value(&mut record, "title", input.title);
             if let Some(value) = input.content { insert_value(&mut record, "content", value); }
             insert_value(&mut record, "author", input.author);
@@ -265,7 +265,7 @@ pub mod prod_models {
 
         fn update_to_record(input: Self::Update, _context: &Context) -> Result<StorageRecord, DatabaseError> {
             let mut record = StorageRecord::new();
-            if let Patch::Set(value) = input.permissions { insert_value(&mut record, database::FIELD_PERMISSIONS, value); }
+            if let Patch::Set(value) = input.permissions { insert_value(&mut record, nx_db::FIELD_PERMISSIONS, value); }
             if let Patch::Set(value) = input.title { insert_value(&mut record, "title", value); }
             if let Patch::Set(value) = input.content { insert_value(&mut record, "content", value); }
             if let Patch::Set(value) = input.author { insert_value(&mut record, "author", value); }
@@ -274,7 +274,7 @@ pub mod prod_models {
 
         fn entity_from_record(mut record: StorageRecord, _context: &Context) -> Result<Self::Entity, DatabaseError> {
             Ok(PostEntity {
-                id: take_required(&mut record, database::FIELD_ID)?,
+                id: take_required(&mut record, nx_db::FIELD_ID)?,
                 title: take_required(&mut record, "title")?,
                 content: take_optional(&mut record, "content")?,
                 author: take_required(&mut record, "author")?,

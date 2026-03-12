@@ -1,6 +1,6 @@
-use nx_core::errors::DatabaseError;
-use nx_core::traits::migration::{MigrationCollection, MigrationIndex};
-use nx_core::{
+use database_core::errors::DatabaseError;
+use database_core::traits::migration::{MigrationCollection, MigrationIndex};
+use database_core::{
     AttributePersistence, Context, IndexKind, Order,
     COLUMN_CREATED_AT, COLUMN_ID, COLUMN_PERMISSIONS, COLUMN_SEQUENCE, COLUMN_UPDATED_AT,
 };

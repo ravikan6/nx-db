@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-database = { path = "..", features = ["postgres"] }
+nx-db = { path = "..", features = ["postgres"] }
 database-codegen = { path = "../database-codegen" }
 clap = { version = "4.5.31", features = ["derive"] }
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
