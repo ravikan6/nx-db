@@ -12,6 +12,8 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ravikan6/nx-db"
 
 [package]
 name = "nx-db"
