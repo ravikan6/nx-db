@@ -344,10 +344,63 @@ where
 
         self.events.dispatch(Event::document_created(
             collection.id,
-            M::id_to_string(M::entity_to_id(&entity)),
+            M::id_to_string(M::entity_to_id(&entity)).to_string(),
         ));
 
         Ok(entity)
+    }
+
+    pub async fn insert_many_models<M>(
+        &self,
+        context: &Context,
+        inputs: Vec<M::Create>,
+    ) -> Result<Vec<M::Entity>, DatabaseError>
+    where
+        M: Model,
+        M::Entity: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        if inputs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let collection = self.collection(M::schema().id)?;
+        self.authorize_collection(context, collection, PermissionEnum::Create)?;
+
+        let mut encoded_records = Vec::with_capacity(inputs.len());
+        for input in inputs {
+            let record = M::create_to_record(input, context)?;
+            let encoded = self.prepare_record_for_storage::<M>(context, collection, record, false)?;
+            encoded_records.push(encoded);
+        }
+
+        let stored_records = self
+            .adapter
+            .insert_many(context, collection, encoded_records)
+            .await?;
+
+        let mut entities = Vec::with_capacity(stored_records.len());
+        for stored in stored_records {
+            let entity = self
+                .materialize_entity_fast::<M>(context, collection, stored.clone(), false)
+                .await?;
+
+            // Populate cache
+            if let Some(cache) = &self.cache {
+                let id_str = M::id_to_string(M::entity_to_id(&entity));
+                let cache_key = self.build_cache_key(collection.id, &id_str);
+                self.write_cache::<M>(cache.as_ref(), &cache_key, &stored, &entity)
+                    .await?;
+            }
+
+            self.events.dispatch(Event::document_created(
+                collection.id,
+                M::id_to_string(M::entity_to_id(&entity)).to_string(),
+            ));
+
+            entities.push(entity);
+        }
+
+        Ok(entities)
     }
 
     pub async fn update_model<M>(
@@ -1115,6 +1168,33 @@ mod tests {
                     .expect("rows lock")
                     .insert((schema_name, collection, id), values.clone());
 
+                Ok(values)
+            })
+        }
+
+        fn insert_many(
+            &self,
+            context: &crate::Context,
+            schema: &'static CollectionSchema,
+            values: Vec<StorageRecord>,
+        ) -> AdapterFuture<'_, Result<Vec<StorageRecord>, DatabaseError>> {
+            let rows = self.rows.clone();
+            let schema_name = context.schema().to_string();
+            let collection = schema.id.to_string();
+
+            Box::pin(async move {
+                let mut locked = rows.lock().expect("rows lock");
+                for record in &values {
+                    let id = match record.get("id") {
+                        Some(StorageValue::String(value)) => value.clone(),
+                        _ => {
+                            return Err(DatabaseError::Other(
+                                "record is missing string id field".into(),
+                            ));
+                        }
+                    };
+                    locked.insert((schema_name.clone(), collection.clone(), id), record.clone());
+                }
                 Ok(values)
             })
         }

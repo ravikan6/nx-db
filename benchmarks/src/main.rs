@@ -54,17 +54,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             permissions: vec!["read(\"any\")".to_string()],
         }).await?;
         
-        let mut posts = Vec::new();
+        let mut posts = Vec::with_capacity(posts_per_user);
         for j in 0..posts_per_user {
-            posts.push(post_repo.insert(CreatePost {
+            posts.push(CreatePost {
                 id: Key::new(format!("post_{}_{}", i, j)).unwrap(),
                 title: format!("Post {} by User {}", j, i),
                 content: Some("Benchmarking our production grade text search capabilities with some dummy content.".to_string()),
                 author: user.id.clone().to_string(),
                 permissions: vec!["read(\"any\")".to_string()],
-            }));
+            });
         }
-        join_all(posts).await;
+        post_repo.insert_many(posts).await?;
     }
     
     let duration = start.elapsed();

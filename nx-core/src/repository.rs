@@ -95,6 +95,10 @@ where
         self.database.insert_model::<M>(&self.context, input).await
     }
 
+    pub async fn insert_many(&self, inputs: Vec<M::Create>) -> Result<Vec<M::Entity>, DatabaseError> {
+        self.database.insert_many_models::<M>(&self.context, inputs).await
+    }
+
     pub async fn get(&self, id: &M::Id) -> Result<Option<M::Entity>, DatabaseError> {
         self.database.get_model::<M>(&self.context, id).await
     }

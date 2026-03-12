@@ -100,6 +100,29 @@ impl StorageAdapter for FakeAdapter {
         })
     }
 
+    fn insert_many(
+        &self,
+        context: &Context,
+        schema: &'static database::CollectionSchema,
+        values: Vec<StorageRecord>,
+    ) -> AdapterFuture<'_, Result<Vec<StorageRecord>, DatabaseError>> {
+        let rows = self.rows.clone();
+        let schema_name = context.schema().to_string();
+        let collection = schema.id.to_string();
+
+        Box::pin(async move {
+            let mut locked = rows.lock().expect("rows lock");
+            for record in &values {
+                let id = match record.get(database::FIELD_ID) {
+                    Some(StorageValue::String(value)) => value.clone(),
+                    _ => return Err(DatabaseError::Other("missing id".into())),
+                };
+                locked.insert((schema_name.clone(), collection.clone(), id), record.clone());
+            }
+            Ok(values)
+        })
+    }
+
     fn get(
         &self,
         context: &Context,

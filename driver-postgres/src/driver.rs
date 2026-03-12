@@ -1133,6 +1133,115 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
         })
     }
 
+    fn insert_many(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        values: Vec<StorageRecord>,
+    ) -> AdapterFuture<'_, Result<Vec<StorageRecord>, DatabaseError>> {
+        let pool = self.pool;
+        let context = context.clone();
+
+        Box::pin(async move {
+            Self::validate_context_support(&context)?;
+
+            if values.is_empty() {
+                return Ok(Vec::new());
+            }
+
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(|error| DatabaseError::Other(format!("postgres begin failed: {error}")))?;
+
+            let table = Self::qualified_table_name(&context, schema.id)?;
+            let mut results = Vec::with_capacity(values.len());
+
+            // Group by attribute keys to handle records with different partial fields
+            let mut groups: BTreeMap<Vec<String>, Vec<StorageRecord>> = BTreeMap::new();
+            for record in values {
+                let mut keys: Vec<String> = record.keys().cloned().collect();
+                keys.sort();
+                groups.entry(keys).or_default().push(record);
+            }
+
+            for (keys, group_records) in groups {
+                let mut builder = QueryBuilder::<Postgres>::new(format!("INSERT INTO {table} ("));
+                
+                let attributes: Vec<_> = Self::persisted_attributes(schema)
+                    .into_iter()
+                    .filter(|a| keys.iter().any(|k| k == a.id))
+                    .collect();
+
+                {
+                    let mut separated = builder.separated(", ");
+                    separated.push(Self::quoted_system_column(COLUMN_ID)?);
+                    separated.push(Self::quoted_system_column(COLUMN_CREATED_AT)?);
+                    separated.push(Self::quoted_system_column(COLUMN_UPDATED_AT)?);
+                    separated.push(Self::quoted_system_column(COLUMN_PERMISSIONS)?);
+                    for attribute in &attributes {
+                        separated.push(Self::quote_identifier(attribute.column)?);
+                    }
+                }
+
+                builder.push(") ");
+                
+                let mut row_data = Vec::with_capacity(group_records.len());
+
+                builder.push_values(group_records, |mut separated, record| {
+                    let uid = Self::extract_string(&record, FIELD_ID).unwrap_or_default();
+                    let created_at = Self::extract_optional_timestamp(&record, FIELD_CREATED_AT).unwrap_or_default();
+                    let updated_at = Self::extract_optional_timestamp(&record, FIELD_UPDATED_AT).unwrap_or_default();
+                    let permissions = Self::extract_optional_string_array(&record, FIELD_PERMISSIONS).unwrap_or_default();
+                    
+                    separated.push_bind(uid);
+                    separated.push_bind(created_at);
+                    separated.push_bind(updated_at);
+                    separated.push_bind(permissions.clone());
+                    
+                    for attribute in &attributes {
+                        let value = record.get(attribute.id).unwrap(); // Guaranteed by grouping
+                        Self::append_bind(&mut separated, value).unwrap();
+                        if attribute.kind == AttributeKind::Json {
+                            separated.push_unseparated("::jsonb");
+                        }
+                    }
+                    
+                    row_data.push((permissions, record));
+                });
+
+                builder.push(format!(" RETURNING {}", Self::quoted_system_column(COLUMN_SEQUENCE)?));
+
+                let rows = builder.build().fetch_all(&mut *tx).await.map_err(|error| {
+                    DatabaseError::Other(format!("postgres insert_many failed: {error}"))
+                })?;
+
+                for _row in rows {
+                    let sequence = _row.try_get::<i64, _>(COLUMN_SEQUENCE).map_err(|error| {
+                        DatabaseError::Other(format!("postgres sequence read failed: {error}"))
+                    })?;
+
+                    let (permissions, mut record) = row_data.remove(0); // Efficiently drain
+                    
+                    Self::sync_permissions(&mut tx, &context, schema, sequence, &permissions).await?;
+
+                    record.insert(FIELD_SEQUENCE.to_string(), StorageValue::Int(sequence));
+                    record.insert(
+                        FIELD_PERMISSIONS.to_string(),
+                        StorageValue::StringArray(permissions),
+                    );
+                    results.push(record);
+                }
+            }
+
+            tx.commit().await.map_err(|error| {
+                DatabaseError::Other(format!("postgres commit failed: {error}"))
+            })?;
+
+            Ok(results)
+        })
+    }
+
     fn get(
         &self,
         context: &Context,

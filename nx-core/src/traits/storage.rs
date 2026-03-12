@@ -49,6 +49,13 @@ pub trait StorageAdapter: Send + Sync {
         values: StorageRecord,
     ) -> AdapterFuture<'_, Result<StorageRecord, DatabaseError>>;
 
+    fn insert_many(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        values: Vec<StorageRecord>,
+    ) -> AdapterFuture<'_, Result<Vec<StorageRecord>, DatabaseError>>;
+
     fn get(
         &self,
         context: &Context,
