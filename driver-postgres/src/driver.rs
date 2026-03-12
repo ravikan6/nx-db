@@ -34,7 +34,7 @@ impl<'a> PostgresAdapter<'a> {
         chars.all(|ch| ch == '_' || ch.is_ascii_alphanumeric())
     }
 
-    pub(crate) fn quote_identifier(identifier: &str) -> Result<String, DatabaseError> {
+    pub fn quote_identifier(identifier: &str) -> Result<String, DatabaseError> {
         if !Self::is_valid_identifier(identifier) {
             return Err(DatabaseError::Other(format!(
                 "invalid postgres identifier: {identifier}"

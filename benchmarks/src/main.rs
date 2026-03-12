@@ -19,8 +19,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Connecting to database...");
     let pool = sqlx::PgPool::connect(&url).await?;
     
+    sqlx::query("CREATE SCHEMA IF NOT EXISTS public")
+        .execute(&pool)
+        .await?;
     // Clear tables
-    sqlx::query("TRUNCATE TABLE nuvix_bench.users, nuvix_bench.posts, nuvix_bench.users_perms, nuvix_bench.posts_perms CASCADE")
+    sqlx::query("TRUNCATE TABLE public.users, public.posts, public.users_perms, public.posts_perms CASCADE")
         .execute(&pool)
         .await?;
     
@@ -31,13 +34,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     // Use the dedicated benchmark schema
-    let ctx = Context::default().with_schema("nuvix_bench").with_role(database::Role::any());
+    let ctx = Context::default().with_schema("public").with_role(database::Role::any());
     let db_scoped = db.scope(ctx.clone());
 
     println!("\n--- Benchmarking Production Scenarios ---\n");
 
     // 1. Batch Insertion Performance
-    let user_count = 100;
+    let user_count = 500;
     let posts_per_user = 10;
     
     println!("Inserting {} users and {} posts...", user_count, user_count * posts_per_user);
@@ -59,9 +62,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     
     let users = user_repo.insert_many(create_users).await?;
     
+    let mut posts = Vec::with_capacity(posts_per_user * user_count);
     for user in users {
         let u_id_str = user.id.to_string();
-        let mut posts = Vec::with_capacity(posts_per_user);
         for j in 0..posts_per_user {
             posts.push(CreatePost {
                 id: Key::new(format!("post_{}_{}", u_id_str, j)).unwrap(),
@@ -71,8 +74,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 permissions: vec!["read(\"any\")".to_string()],
             });
         }
-        post_repo.insert_many(posts).await?;
     }
+    post_repo.insert_many(posts).await?;
     
     let duration = start.elapsed();
     println!("Batch Insert: {:?} ({:.2} ops/sec)", duration, (user_count + user_count * posts_per_user) as f64 / duration.as_secs_f64());

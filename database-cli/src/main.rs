@@ -35,6 +35,9 @@ enum Commands {
         /// Database URL (defaults to DATABASE_URL env var)
         #[arg(short, long)]
         database_url: Option<String>,
+        /// Database schema (defaults to public)
+        #[arg(short, long, default_value = "public")]
+        schema: String,
         /// Dry run: show changes without applying them
         #[arg(long)]
         dry_run: bool,
@@ -66,7 +69,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             validate_project_spec(&spec)?;
             println!("schema ok: {} collection(s)", spec.collections.len());
         }
-        Commands::Migrate { input, database_url, dry_run } => {
+        Commands::Migrate { input, database_url, schema, dry_run } => {
             let url = database_url
                 .or_else(|| std::env::var("DATABASE_URL").ok())
                 .ok_or("Database URL not provided. Set DATABASE_URL env var or use --database-url")?;
@@ -77,12 +80,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let pool = sqlx::PgPool::connect(&url).await?;
             let engine = database::migration::MigrationEngine::new(&pool);
-            let context = database::Context::default().with_schema("nuvix_bench");
+            let context = database::Context::default().with_schema(&schema);
 
             let collections: Vec<&dyn database::traits::migration::MigrationCollection> = spec.collections
                 .iter()
                 .map(|c| c as &dyn database::traits::migration::MigrationCollection)
                 .collect();
+
+            // Ensure schema exists
+            let quoted_schema = database::PostgresAdapter::quote_identifier(&schema)?;
+            sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {}", quoted_schema))
+                .execute(&pool)
+                .await?;
 
             let changes: Vec<database::migration::MigrationChange> = engine.diff(&context, &collections).await?;
 
