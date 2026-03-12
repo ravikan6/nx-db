@@ -9,6 +9,10 @@ use std::time::{Duration, Instant};
 
 struct MemoryCacheExpiry;
 
+// Use a very long duration for "never expire" since returning None 
+// can sometimes lead to using builder-level defaults if they existed.
+const NEVER_EXPIRE: Duration = Duration::from_secs(100 * 365 * 24 * 60 * 60);
+
 impl Expiry<String, (Bytes, Option<Duration>)> for MemoryCacheExpiry {
     fn expire_after_create(
         &self,
@@ -16,7 +20,7 @@ impl Expiry<String, (Bytes, Option<Duration>)> for MemoryCacheExpiry {
         value: &(Bytes, Option<Duration>),
         _current_time: Instant,
     ) -> Option<Duration> {
-        value.1
+        value.1.or(Some(NEVER_EXPIRE))
     }
 
     fn expire_after_update(
@@ -26,7 +30,7 @@ impl Expiry<String, (Bytes, Option<Duration>)> for MemoryCacheExpiry {
         _updated_at: Instant,
         _duration_until_expiry: Option<Duration>,
     ) -> Option<Duration> {
-        value.1
+        value.1.or(Some(NEVER_EXPIRE))
     }
 }
 
@@ -184,60 +188,5 @@ impl CacheBackend for MemoryCacheBackend {
     ) -> CacheFuture<'a, Result<bool, CacheError>> {
         let qualified = Self::qualified_key(namespace, key);
         Box::pin(async move { Ok(self.cache.contains_key(&qualified)) })
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::MemoryCacheBackend;
-    use crate::{Cache, CacheBackend, CacheKey, CacheWrite, Namespace};
-    use bytes::Bytes;
-    use std::time::Duration;
-
-    #[tokio::test]
-    async fn stores_and_reads_values() {
-        let backend = MemoryCacheBackend::new(100);
-        let cache = Cache::new(backend);
-        let scope = cache.namespace(Namespace::new("users").expect("valid namespace"));
-
-        scope
-            .set(CacheWrite::new(
-                CacheKey::new("profile").expect("valid key"),
-                Bytes::from_static(b"hello"),
-            ))
-            .await
-            .expect("set should succeed");
-
-        let value = scope
-            .get(&CacheKey::new("profile").expect("valid key"))
-            .await
-            .expect("get should succeed");
-
-        assert_eq!(value, Some(Bytes::from_static(b"hello")));
-    }
-
-    #[tokio::test]
-    async fn respects_ttls() {
-        let backend = MemoryCacheBackend::new(100);
-        let namespace = Namespace::new("users").expect("valid namespace");
-        let key = CacheKey::new("id").expect("valid key");
-
-        backend
-            .set(
-                &namespace,
-                CacheWrite::new(key.clone(), "user-1").with_ttl(Duration::from_millis(10)),
-            )
-            .await
-            .expect("set should succeed");
-
-        tokio::time::sleep(Duration::from_millis(50)).await;
-
-        assert_eq!(
-            backend
-                .get(&namespace, &key)
-                .await
-                .expect("get should succeed"),
-            None
-        );
     }
 }

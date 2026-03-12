@@ -1,4 +1,5 @@
-use database::{Context, Database, PostgresAdapter, Key, NoopEventBus};
+use database::{Context, Database, PostgresAdapter, Key, Model};
+use database::traits::storage::StorageAdapter;
 use std::time::{Instant};
 use rand::Rng;
 use futures::future::join_all;
@@ -31,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Use the dedicated benchmark schema
     let ctx = Context::default().with_schema("nuvix_bench").with_role(database::Role::any());
-    let db_scoped = db.scope(ctx);
+    let db_scoped = db.scope(ctx.clone());
 
     println!("\n--- Benchmarking Production Scenarios ---\n");
 
@@ -76,21 +77,45 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let duration = start.elapsed();
     println!("Batch Insert: {:?} ({:.2} ops/sec)", duration, (user_count + user_count * posts_per_user) as f64 / duration.as_secs_f64());
 
+    // Warm cache
+    println!("Warming cache for all posts...");
+    let all_posts = post_repo.find(database::QuerySpec::new().limit(user_count * posts_per_user)).await?;
+    println!("Fetched {} posts for warming.", all_posts.len());
+    
+    // Explicitly re-get them to ensure they are in the individual document cache if find didn't do it
+    for post in all_posts.iter().take(500) {
+        let _ = post_repo.get(&post.id).await?;
+    }
+
     // 2. Point Lookup Performance (with Cache)
-    println!("\nBenchmarking Point Lookups (Random)...");
+    println!("\nBenchmarking Point Lookups (Random Cached)...");
     let lookups = 1000;
     let mut rng = rand::thread_rng();
     let start = Instant::now();
     
     for _ in 0..lookups {
-        let u_idx = rng.gen_range(0..user_count);
-        let p_idx = rng.gen_range(0..posts_per_user);
-        let id = Key::new(format!("post_{}_{}", u_idx, p_idx)).unwrap();
+        let p_idx = rng.gen_range(0..500);
+        let id = all_posts[p_idx].id.clone();
         let _ = post_repo.get(&id).await?;
     }
     
     let duration = start.elapsed();
     println!("Point Lookups ({} ops): {:?} ({:.2} ops/sec)", lookups, duration, lookups as f64 / duration.as_secs_f64());
+
+    // 2.5 Raw Adapter Lookup Performance (Baseline)
+    println!("\nBenchmarking Raw Adapter Point Lookups (Random)...");
+    let start = Instant::now();
+    let adapter = PostgresAdapter::new(&pool);
+    let collection = User::schema();
+    
+    for _ in 0..lookups {
+        let p_idx = rng.gen_range(0..100);
+        let id = format!("post_user_0_{}", p_idx);
+        let _ = adapter.get(&ctx, collection, &id).await?;
+    }
+    
+    let duration = start.elapsed();
+    println!("Raw Adapter Lookups ({} ops): {:?} ({:.2} ops/sec)", lookups, duration, lookups as f64 / duration.as_secs_f64());
 
     // 3. Full-Text Search Performance
     println!("\nBenchmarking Full-Text Search...");
