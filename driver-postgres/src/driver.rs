@@ -581,79 +581,115 @@ impl<'a> PostgresAdapter<'a> {
         schema: &'static CollectionSchema,
         filter: &Filter,
     ) -> Result<(), DatabaseError> {
-        let column = Self::column_for_field(schema, &filter.field)?;
-
-        match &filter.op {
-            FilterOp::Eq(StorageValue::Null) | FilterOp::IsNull => {
-                builder.push(format!("{column} IS NULL"));
+        match filter {
+            Filter::Field { field, op } => {
+                let column = Self::column_for_field(schema, field)?;
+                match op {
+                    FilterOp::Eq(StorageValue::Null) | FilterOp::IsNull => {
+                        builder.push(format!("{column} IS NULL"));
+                    }
+                    FilterOp::NotEq(StorageValue::Null) | FilterOp::IsNotNull => {
+                        builder.push(format!("{column} IS NOT NULL"));
+                    }
+                    FilterOp::Eq(value) => {
+                        builder.push(format!("{column} = "));
+                        Self::push_bind_value(builder, value)?;
+                    }
+                    FilterOp::NotEq(value) => {
+                        builder.push(format!("{column} <> "));
+                        Self::push_bind_value(builder, value)?;
+                    }
+                    FilterOp::Gt(value) => {
+                        builder.push(format!("{column} > "));
+                        Self::push_bind_value(builder, value)?;
+                    }
+                    FilterOp::Gte(value) => {
+                        builder.push(format!("{column} >= "));
+                        Self::push_bind_value(builder, value)?;
+                    }
+                    FilterOp::Lt(value) => {
+                        builder.push(format!("{column} < "));
+                        Self::push_bind_value(builder, value)?;
+                    }
+                    FilterOp::Lte(value) => {
+                        builder.push(format!("{column} <= "));
+                        Self::push_bind_value(builder, value)?;
+                    }
+                    FilterOp::Contains(value) => {
+                        builder.push(format!("{column}::text LIKE '%' || "));
+                        Self::push_bind_value(builder, value)?;
+                        builder.push(" || '%'");
+                    }
+                    FilterOp::StartsWith(value) => {
+                        builder.push(format!("{column}::text LIKE "));
+                        Self::push_bind_value(builder, value)?;
+                        builder.push(" || '%'");
+                    }
+                    FilterOp::EndsWith(value) => {
+                        builder.push(format!("{column}::text LIKE '%' || "));
+                        Self::push_bind_value(builder, value)?;
+                    }
+                    FilterOp::TextSearch(value) => {
+                        builder.push(format!(
+                            "to_tsvector('simple', COALESCE({column}::text, '')) @@ websearch_to_tsquery('simple', "
+                        ));
+                        Self::push_bind_value(builder, value)?;
+                        builder.push(")");
+                    }
+                    FilterOp::In(values) => {
+                        if values.is_empty() {
+                            builder.push("FALSE");
+                        } else {
+                            builder.push(format!("{column} IN ("));
+                            let mut first = true;
+                            for value in values {
+                                if !first {
+                                    builder.push(", ");
+                                }
+                                first = false;
+                                Self::push_bind_value(builder, value)?;
+                            }
+                            builder.push(")");
+                        }
+                    }
+                }
             }
-            FilterOp::NotEq(StorageValue::Null) | FilterOp::IsNotNull => {
-                builder.push(format!("{column} IS NOT NULL"));
-            }
-            FilterOp::Eq(value) => {
-                builder.push(format!("{column} = "));
-                Self::push_bind_value(builder, value)?;
-            }
-            FilterOp::NotEq(value) => {
-                builder.push(format!("{column} <> "));
-                Self::push_bind_value(builder, value)?;
-            }
-            FilterOp::Gt(value) => {
-                builder.push(format!("{column} > "));
-                Self::push_bind_value(builder, value)?;
-            }
-            FilterOp::Gte(value) => {
-                builder.push(format!("{column} >= "));
-                Self::push_bind_value(builder, value)?;
-            }
-            FilterOp::Lt(value) => {
-                builder.push(format!("{column} < "));
-                Self::push_bind_value(builder, value)?;
-            }
-            FilterOp::Lte(value) => {
-                builder.push(format!("{column} <= "));
-                Self::push_bind_value(builder, value)?;
-            }
-            FilterOp::Contains(value) => {
-                // In Postgres, string containment uses LIKE '%value%' or ILIKE.
-                // For a robust driver, let's assume we use standard LIKE with wildcard appending
-                // However, since `value` is pushed via `push_bind_value`, we need a way to wrap it.
-                // The easiest way is to cast column to text and use LIKE '%' || $1 || '%'
-                builder.push(format!("{column}::text LIKE '%' || "));
-                Self::push_bind_value(builder, value)?;
-                builder.push(" || '%'");
-            }
-            FilterOp::StartsWith(value) => {
-                builder.push(format!("{column}::text LIKE "));
-                Self::push_bind_value(builder, value)?;
-                builder.push(" || '%'");
-            }
-            FilterOp::EndsWith(value) => {
-                builder.push(format!("{column}::text LIKE '%' || "));
-                Self::push_bind_value(builder, value)?;
-            }
-            FilterOp::TextSearch(value) => {
-                builder.push(format!(
-                    "to_tsvector('simple', COALESCE({column}::text, '')) @@ websearch_to_tsquery('simple', "
-                ));
-                Self::push_bind_value(builder, value)?;
-                builder.push(")");
-            }
-            FilterOp::In(values) => {
-                if values.is_empty() {
-                    builder.push("FALSE");
+            Filter::And(filters) => {
+                if filters.is_empty() {
+                    builder.push("TRUE");
                 } else {
-                    builder.push(format!("{column} IN ("));
+                    builder.push("(");
                     let mut first = true;
-                    for value in values {
+                    for f in filters {
                         if !first {
-                            builder.push(", ");
+                            builder.push(" AND ");
                         }
                         first = false;
-                        Self::push_bind_value(builder, value)?;
+                        Self::push_filter(builder, schema, f)?;
                     }
                     builder.push(")");
                 }
+            }
+            Filter::Or(filters) => {
+                if filters.is_empty() {
+                    builder.push("FALSE");
+                } else {
+                    builder.push("(");
+                    let mut first = true;
+                    for f in filters {
+                        if !first {
+                            builder.push(" OR ");
+                        }
+                        first = false;
+                        Self::push_filter(builder, schema, f)?;
+                    }
+                    builder.push(")");
+                }
+            }
+            Filter::Not(filter) => {
+                builder.push("NOT (");
+                Self::push_filter(builder, schema, filter)?;
+                builder.push(")");
             }
         }
 

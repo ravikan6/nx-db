@@ -177,14 +177,15 @@ where
 
         let repo = self.database.scope(self.context.clone()).repo::<RM>();
         let mut query = QuerySpec::new();
-        query = query.filter(crate::query::Filter {
-            field: crate::system_fields::FIELD_ID,
-            op: crate::query::FilterOp::In(
+        query = query.filter(crate::query::Filter::field(
+            crate::system_fields::FIELD_ID,
+            crate::query::FilterOp::In(
                 keys.into_iter()
                     .map(crate::traits::storage::StorageValue::String)
                     .collect(),
             ),
-        });
+        ));
+
 
         let related: Vec<RM::Entity> = repo.find(query).await?;
         let mut map = std::collections::HashMap::with_capacity(related.len());
@@ -218,14 +219,14 @@ where
 
         let repo = self.database.scope(self.context.clone()).repo::<RM>();
         let mut query = QuerySpec::new();
-        query = query.filter(crate::query::Filter {
-            field: foreign_key_field,
-            op: crate::query::FilterOp::In(
+        query = query.filter(crate::query::Filter::field(
+            foreign_key_field,
+            crate::query::FilterOp::In(
                 keys.into_iter()
                     .map(crate::traits::storage::StorageValue::String)
                     .collect(),
             ),
-        });
+        ));
 
         let related: Vec<RM::Entity> = repo.find(query).await?;
         let mut map: std::collections::HashMap<String, Vec<RM::Entity>> =

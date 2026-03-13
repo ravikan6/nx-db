@@ -2,7 +2,7 @@ use crate::Context;
 use crate::errors::DatabaseError;
 use crate::events::{Event, EventBus, NoopEventBus};
 use crate::model::Model;
-use crate::query::QuerySpec;
+use crate::query::{Filter, FilterOp, QuerySpec};
 use crate::registry::CollectionRegistry;
 use crate::repository::{Repository, ScopedDatabase};
 use crate::schema::CollectionSchema;
@@ -239,25 +239,12 @@ where
         query: &QuerySpec,
     ) -> Result<(), DatabaseError> {
         for filter in query.filters() {
-            if !is_system_field(&filter.field) {
-                let attribute = collection.attribute(&filter.field).ok_or_else(|| {
-                    DatabaseError::Other(format!(
-                        "collection '{}': unknown query field '{}'",
-                        collection.id, filter.field
-                    ))
-                })?;
-                if attribute.persistence != crate::AttributePersistence::Persisted {
-                    return Err(DatabaseError::Other(format!(
-                        "collection '{}': virtual field '{}' cannot be used in filters",
-                        collection.id, filter.field
-                    )));
-                }
-            }
+            self.validate_filter(collection, filter)?;
         }
 
         for sort in query.sorts() {
-            if !is_system_field(&sort.field) {
-                let attribute = collection.attribute(&sort.field).ok_or_else(|| {
+            if !is_system_field(sort.field) {
+                let attribute = collection.attribute(sort.field).ok_or_else(|| {
                     DatabaseError::Other(format!(
                         "collection '{}': unknown sort field '{}'",
                         collection.id, sort.field
@@ -272,6 +259,40 @@ where
             }
         }
 
+        Ok(())
+    }
+
+    fn validate_filter(
+        &self,
+        collection: &'static CollectionSchema,
+        filter: &Filter,
+    ) -> Result<(), DatabaseError> {
+        match filter {
+            Filter::Field { field, .. } => {
+                if !is_system_field(field) {
+                    let attribute = collection.attribute(field).ok_or_else(|| {
+                        DatabaseError::Validation(format!(
+                            "collection '{}': unknown query field '{}'",
+                            collection.id, field
+                        ))
+                    })?;
+                    if attribute.persistence != crate::AttributePersistence::Persisted {
+                        return Err(DatabaseError::Other(format!(
+                            "collection '{}': virtual field '{}' cannot be used in filters",
+                            collection.id, field
+                        )));
+                    }
+                }
+            }
+            Filter::And(filters) | Filter::Or(filters) => {
+                for f in filters {
+                    self.validate_filter(collection, f)?;
+                }
+            }
+            Filter::Not(filter) => {
+                self.validate_filter(collection, filter)?;
+            }
+        }
         Ok(())
     }
 
@@ -2418,48 +2439,57 @@ mod tests {
     }
 
     fn matches_filter(record: &StorageRecord, filter: &crate::query::Filter) -> bool {
-        let value = record.get(&filter.field.to_string());
+        match filter {
+            crate::query::Filter::Field { field, op } => {
+                let value = record.get(&field.to_string());
 
-        match &filter.op {
-            FilterOp::Eq(expected) => value == Some(expected),
-            FilterOp::NotEq(expected) => value != Some(expected),
-            FilterOp::In(values) => value
-                .map(|current| values.contains(current))
-                .unwrap_or(false),
-            FilterOp::Gt(expected) => compare_value(value, Some(expected)).is_gt(),
-            FilterOp::Gte(expected) => {
-                let ordering = compare_value(value, Some(expected));
-                ordering.is_gt() || ordering.is_eq()
+                match op {
+                    FilterOp::Eq(expected) => value == Some(expected),
+                    FilterOp::NotEq(expected) => value != Some(expected),
+                    FilterOp::In(values) => value
+                        .map(|current| values.contains(current))
+                        .unwrap_or(false),
+                    FilterOp::Gt(expected) => compare_value(value, Some(expected)).is_gt(),
+                    FilterOp::Gte(expected) => {
+                        let ordering = compare_value(value, Some(expected));
+                        ordering.is_gt() || ordering.is_eq()
+                    }
+                    FilterOp::Lt(expected) => compare_value(value, Some(expected)).is_lt(),
+                    FilterOp::Lte(expected) => {
+                        let ordering = compare_value(value, Some(expected));
+                        ordering.is_lt() || ordering.is_eq()
+                    }
+                    FilterOp::Contains(expected) => match (value, expected) {
+                        (Some(StorageValue::String(s)), StorageValue::String(sub)) => s.contains(sub),
+                        _ => false,
+                    },
+                    FilterOp::StartsWith(expected) => match (value, expected) {
+                        (Some(StorageValue::String(s)), StorageValue::String(prefix)) => {
+                            s.starts_with(prefix)
+                        }
+                        _ => false,
+                    },
+                    FilterOp::EndsWith(expected) => match (value, expected) {
+                        (Some(StorageValue::String(s)), StorageValue::String(suffix)) => {
+                            s.ends_with(suffix)
+                        }
+                        _ => false,
+                    },
+                    FilterOp::TextSearch(expected) => match (value, expected) {
+                        (Some(StorageValue::String(s)), StorageValue::String(query)) => {
+                            s.to_lowercase().contains(&query.to_lowercase())
+                        }
+                        _ => false,
+                    },
+                    FilterOp::IsNull => matches!(value, None | Some(StorageValue::Null)),
+                    FilterOp::IsNotNull => !matches!(value, None | Some(StorageValue::Null)),
+                }
             }
-            FilterOp::Lt(expected) => compare_value(value, Some(expected)).is_lt(),
-            FilterOp::Lte(expected) => {
-                let ordering = compare_value(value, Some(expected));
-                ordering.is_lt() || ordering.is_eq()
+            crate::query::Filter::And(filters) => {
+                filters.iter().all(|f| Self::matches_filter(record, f))
             }
-            FilterOp::Contains(expected) => match (value, expected) {
-                (Some(StorageValue::String(s)), StorageValue::String(sub)) => s.contains(sub),
-                _ => false,
-            },
-            FilterOp::StartsWith(expected) => match (value, expected) {
-                (Some(StorageValue::String(s)), StorageValue::String(prefix)) => {
-                    s.starts_with(prefix)
-                }
-                _ => false,
-            },
-            FilterOp::EndsWith(expected) => match (value, expected) {
-                (Some(StorageValue::String(s)), StorageValue::String(suffix)) => {
-                    s.ends_with(suffix)
-                }
-                _ => false,
-            },
-            FilterOp::TextSearch(expected) => match (value, expected) {
-                (Some(StorageValue::String(s)), StorageValue::String(query)) => {
-                    s.to_lowercase().contains(&query.to_lowercase())
-                }
-                _ => false,
-            },
-            FilterOp::IsNull => matches!(value, None | Some(StorageValue::Null)),
-            FilterOp::IsNotNull => !matches!(value, None | Some(StorageValue::Null)),
+            crate::query::Filter::Or(filters) => filters.iter().any(|f| Self::matches_filter(record, f)),
+            crate::query::Filter::Not(filter) => !Self::matches_filter(record, filter),
         }
     }
 

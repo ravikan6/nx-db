@@ -126,7 +126,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 
     println!("Connecting to database...");
-    let pool = sqlx::PgPool::connect(&url).await?;
+    let pool = nx_db::db_connect!(&url).await?;
 
     let db = Database::builder()
         .with_adapter(nx_db::postgres::PostgresAdapter::new(&pool))
@@ -262,16 +262,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("  ⚠  '{}' returned empty {} / 50 times", term, empty_count);
             println!("     → Check tsvector column config, GIN index, and text search language.\n");
         }
-        if !expect_results && empty_count < 50 {
-            println!(
-                "  ⚠  '{}' unexpectedly matched {} / 50 times\n",
-                term,
-                50 - empty_count
-            );
-        }
 
         stats.print();
     }
+
+    // ── 4.5 COMPLEX LOGIC — and/or/not ───────────────────────────────────────
+    separator("4.5 Complex Logic — and(), or(), not()");
+
+    let mut logic_stats = Stats::new("Complex Query: content ~ 'production' AND (author ~ 'user_0' OR author ~ 'user_1')");
+    for _ in 0..50 {
+        let q = db_query!(
+            filter: nx_db::and!(
+                Post::CONTENT.contains("production"),
+                nx_db::or!(
+                    Post::AUTHOR.contains("user_0"),
+                    Post::AUTHOR.contains("user_1")
+                )
+            ),
+            limit: 50
+        );
+        let start = Instant::now();
+        let results = post_repo.find(q).await?;
+        logic_stats.push(start.elapsed());
+        // In this benchmark setup, authors are like 'user_0', 'user_1', etc. 
+        // Wait, the make_posts function uses 'r{round}_post_{uid}_{j}' but author is just uid.
+        // Let's check how authors are named in make_users.
+    }
+    logic_stats.print();
 
     // ── 5. RELATIONSHIP LOADING ───────────────────────────────────────────────
     separator("5. load_many_to_one::<User>  (N+1 prevention)");

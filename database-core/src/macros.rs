@@ -1,4 +1,25 @@
 #[macro_export]
+macro_rules! and {
+    ($($filter:expr),* $(,)?) => {
+        $crate::Filter::and(vec![$($filter),*])
+    };
+}
+
+#[macro_export]
+macro_rules! or {
+    ($($filter:expr),* $(,)?) => {
+        $crate::Filter::or(vec![$($filter),*])
+    };
+}
+
+#[macro_export]
+macro_rules! not {
+    ($filter:expr) => {
+        $crate::Filter::not($filter)
+    };
+}
+
+#[macro_export]
 macro_rules! db_context {
     (schema: $schema:expr) => {
         $crate::Context::default().with_schema($schema)
@@ -54,6 +75,15 @@ macro_rules! db_query {
     };
     (@apply $query:ident, offset, $val:expr) => {
         $query.offset($val)
+    };
+    (@apply $query:ident, and, $val:expr) => {
+        $query.filter($crate::Filter::And($val))
+    };
+    (@apply $query:ident, or, $val:expr) => {
+        $query.filter($crate::Filter::Or($val))
+    };
+    (@apply $query:ident, not, $val:expr) => {
+        $query.filter($crate::Filter::Not(Box::new($val)))
     };
 }
 

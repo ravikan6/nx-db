@@ -11,7 +11,15 @@ pub mod postgres {
 }
 
 pub mod prelude {
-    pub use crate::core::{Context, Database, Key, Model, QuerySpec, Repository, Role};
+    pub use crate::core::{Context, Database, Filter, Key, Model, QuerySpec, Repository, Role};
     #[cfg(feature = "postgres")]
     pub use crate::postgres::PostgresAdapter;
+}
+
+#[cfg(feature = "postgres")]
+#[macro_export]
+macro_rules! db_connect {
+    ($url:expr) => {
+        sqlx::PgPool::connect($url)
+    };
 }

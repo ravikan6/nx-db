@@ -22,9 +22,29 @@ pub enum FilterOp {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct Filter {
-    pub field: &'static str,
-    pub op: FilterOp,
+pub enum Filter {
+    Field { field: &'static str, op: FilterOp },
+    And(Vec<Filter>),
+    Or(Vec<Filter>),
+    Not(Box<Filter>),
+}
+
+impl Filter {
+    pub fn field(field: &'static str, op: FilterOp) -> Self {
+        Self::Field { field, op }
+    }
+
+    pub fn and<I: IntoIterator<Item = Filter>>(filters: I) -> Self {
+        Self::And(filters.into_iter().collect())
+    }
+
+    pub fn or<I: IntoIterator<Item = Filter>>(filters: I) -> Self {
+        Self::Or(filters.into_iter().collect())
+    }
+
+    pub fn not(filter: Filter) -> Self {
+        Self::Not(Box::new(filter))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,20 +145,20 @@ impl<M, T> Field<M, T> {
     where
         V: IntoQueryValue,
     {
-        Filter {
-            field: self.name,
-            op: FilterOp::Eq(value.into_query_value()),
-        }
+        Filter::field(
+            self.name,
+            FilterOp::Eq(value.into_query_value()),
+        )
     }
 
     pub fn not_eq<V>(&self, value: V) -> Filter
     where
         V: IntoQueryValue,
     {
-        Filter {
-            field: self.name,
-            op: FilterOp::NotEq(value.into_query_value()),
-        }
+        Filter::field(
+            self.name,
+            FilterOp::NotEq(value.into_query_value()),
+        )
     }
 
     pub fn one_of<I, V>(&self, values: I) -> Filter
@@ -146,109 +166,109 @@ impl<M, T> Field<M, T> {
         I: IntoIterator<Item = V>,
         V: IntoQueryValue,
     {
-        Filter {
-            field: self.name,
-            op: FilterOp::In(
+        Filter::field(
+            self.name,
+            FilterOp::In(
                 values
                     .into_iter()
                     .map(IntoQueryValue::into_query_value)
                     .collect(),
             ),
-        }
+        )
     }
 
     pub fn gt<V>(&self, value: V) -> Filter
     where
         V: IntoQueryValue,
     {
-        Filter {
-            field: self.name,
-            op: FilterOp::Gt(value.into_query_value()),
-        }
+        Filter::field(
+            self.name,
+            FilterOp::Gt(value.into_query_value()),
+        )
     }
 
     pub fn gte<V>(&self, value: V) -> Filter
     where
         V: IntoQueryValue,
     {
-        Filter {
-            field: self.name,
-            op: FilterOp::Gte(value.into_query_value()),
-        }
+        Filter::field(
+            self.name,
+            FilterOp::Gte(value.into_query_value()),
+        )
     }
 
     pub fn lt<V>(&self, value: V) -> Filter
     where
         V: IntoQueryValue,
     {
-        Filter {
-            field: self.name,
-            op: FilterOp::Lt(value.into_query_value()),
-        }
+        Filter::field(
+            self.name,
+            FilterOp::Lt(value.into_query_value()),
+        )
     }
 
     pub fn lte<V>(&self, value: V) -> Filter
     where
         V: IntoQueryValue,
     {
-        Filter {
-            field: self.name,
-            op: FilterOp::Lte(value.into_query_value()),
-        }
+        Filter::field(
+            self.name,
+            FilterOp::Lte(value.into_query_value()),
+        )
     }
 
     pub fn contains<V>(&self, value: V) -> Filter
     where
         V: IntoQueryValue,
     {
-        Filter {
-            field: self.name,
-            op: FilterOp::Contains(value.into_query_value()),
-        }
+        Filter::field(
+            self.name,
+            FilterOp::Contains(value.into_query_value()),
+        )
     }
 
     pub fn starts_with<V>(&self, value: V) -> Filter
     where
         V: IntoQueryValue,
     {
-        Filter {
-            field: self.name,
-            op: FilterOp::StartsWith(value.into_query_value()),
-        }
+        Filter::field(
+            self.name,
+            FilterOp::StartsWith(value.into_query_value()),
+        )
     }
 
     pub fn ends_with<V>(&self, value: V) -> Filter
     where
         V: IntoQueryValue,
     {
-        Filter {
-            field: self.name,
-            op: FilterOp::EndsWith(value.into_query_value()),
-        }
+        Filter::field(
+            self.name,
+            FilterOp::EndsWith(value.into_query_value()),
+        )
     }
 
     pub fn text_search<V>(&self, value: V) -> Filter
     where
         V: IntoQueryValue,
     {
-        Filter {
-            field: self.name,
-            op: FilterOp::TextSearch(value.into_query_value()),
-        }
+        Filter::field(
+            self.name,
+            FilterOp::TextSearch(value.into_query_value()),
+        )
     }
 
     pub fn is_null(&self) -> Filter {
-        Filter {
-            field: self.name,
-            op: FilterOp::IsNull,
-        }
+        Filter::field(
+            self.name,
+            FilterOp::IsNull,
+        )
     }
 
     pub fn is_not_null(&self) -> Filter {
-        Filter {
-            field: self.name,
-            op: FilterOp::IsNotNull,
-        }
+        Filter::field(
+            self.name,
+            FilterOp::IsNotNull,
+        )
     }
 
     pub fn asc(&self) -> Sort {
@@ -294,17 +314,17 @@ impl<M, T> EncodedField<M, T> {
     }
 
     pub fn eq(&self, value: T) -> Result<Filter, DatabaseError> {
-        Ok(Filter {
-            field: self.name,
-            op: FilterOp::Eq(self.encode_value(value)?),
-        })
+        Ok(Filter::field(
+            self.name,
+            FilterOp::Eq(self.encode_value(value)?),
+        ))
     }
 
     pub fn not_eq(&self, value: T) -> Result<Filter, DatabaseError> {
-        Ok(Filter {
-            field: self.name,
-            op: FilterOp::NotEq(self.encode_value(value)?),
-        })
+        Ok(Filter::field(
+            self.name,
+            FilterOp::NotEq(self.encode_value(value)?),
+        ))
     }
 
     pub fn one_of<I>(&self, values: I) -> Result<Filter, DatabaseError>
@@ -316,80 +336,80 @@ impl<M, T> EncodedField<M, T> {
             encoded.push(self.encode_value(value)?);
         }
 
-        Ok(Filter {
-            field: self.name,
-            op: FilterOp::In(encoded),
-        })
+        Ok(Filter::field(
+            self.name,
+            FilterOp::In(encoded),
+        ))
     }
 
     pub fn gt(&self, value: T) -> Result<Filter, DatabaseError> {
-        Ok(Filter {
-            field: self.name,
-            op: FilterOp::Gt(self.encode_value(value)?),
-        })
+        Ok(Filter::field(
+            self.name,
+            FilterOp::Gt(self.encode_value(value)?),
+        ))
     }
 
     pub fn gte(&self, value: T) -> Result<Filter, DatabaseError> {
-        Ok(Filter {
-            field: self.name,
-            op: FilterOp::Gte(self.encode_value(value)?),
-        })
+        Ok(Filter::field(
+            self.name,
+            FilterOp::Gte(self.encode_value(value)?),
+        ))
     }
 
     pub fn lt(&self, value: T) -> Result<Filter, DatabaseError> {
-        Ok(Filter {
-            field: self.name,
-            op: FilterOp::Lt(self.encode_value(value)?),
-        })
+        Ok(Filter::field(
+            self.name,
+            FilterOp::Lt(self.encode_value(value)?),
+        ))
     }
 
     pub fn lte(&self, value: T) -> Result<Filter, DatabaseError> {
-        Ok(Filter {
-            field: self.name,
-            op: FilterOp::Lte(self.encode_value(value)?),
-        })
+        Ok(Filter::field(
+            self.name,
+            FilterOp::Lte(self.encode_value(value)?),
+        ))
     }
 
     pub fn contains(&self, value: T) -> Result<Filter, DatabaseError> {
-        Ok(Filter {
-            field: self.name,
-            op: FilterOp::Contains(self.encode_value(value)?),
-        })
+        Ok(Filter::field(
+            self.name,
+            FilterOp::Contains(self.encode_value(value)?),
+        ))
     }
 
     pub fn starts_with(&self, value: T) -> Result<Filter, DatabaseError> {
-        Ok(Filter {
-            field: self.name,
-            op: FilterOp::StartsWith(self.encode_value(value)?),
-        })
+        Ok(Filter::field(
+            self.name,
+            FilterOp::StartsWith(self.encode_value(value)?),
+        ))
     }
 
     pub fn ends_with(&self, value: T) -> Result<Filter, DatabaseError> {
-        Ok(Filter {
-            field: self.name,
-            op: FilterOp::EndsWith(self.encode_value(value)?),
-        })
+        Ok(Filter::field(
+            self.name,
+            FilterOp::EndsWith(self.encode_value(value)?),
+        ))
     }
 
     pub fn text_search(&self, value: T) -> Result<Filter, DatabaseError> {
-        Ok(Filter {
-            field: self.name,
-            op: FilterOp::TextSearch(self.encode_value(value)?),
-        })
+        Ok(Filter::field(
+            self.name,
+            FilterOp::TextSearch(self.encode_value(value)?),
+        ))
     }
 
     pub fn is_null(&self) -> Filter {
-        Filter {
-            field: self.name,
-            op: FilterOp::IsNull,
-        }
+        Filter::field(
+            self.name,
+            FilterOp::IsNull,
+        )
     }
 
     pub fn is_not_null(&self) -> Filter {
-        Filter {
-            field: self.name,
-            op: FilterOp::IsNotNull,
-        }
+        Filter::field(
+            self.name,
+            FilterOp::IsNotNull,
+        )
     }
 
     pub fn asc(&self) -> Sort {
