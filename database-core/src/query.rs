@@ -145,20 +145,14 @@ impl<M, T> Field<M, T> {
     where
         V: IntoQueryValue,
     {
-        Filter::field(
-            self.name,
-            FilterOp::Eq(value.into_query_value()),
-        )
+        Filter::field(self.name, FilterOp::Eq(value.into_query_value()))
     }
 
     pub fn not_eq<V>(&self, value: V) -> Filter
     where
         V: IntoQueryValue,
     {
-        Filter::field(
-            self.name,
-            FilterOp::NotEq(value.into_query_value()),
-        )
+        Filter::field(self.name, FilterOp::NotEq(value.into_query_value()))
     }
 
     pub fn one_of<I, V>(&self, values: I) -> Filter
@@ -181,94 +175,64 @@ impl<M, T> Field<M, T> {
     where
         V: IntoQueryValue,
     {
-        Filter::field(
-            self.name,
-            FilterOp::Gt(value.into_query_value()),
-        )
+        Filter::field(self.name, FilterOp::Gt(value.into_query_value()))
     }
 
     pub fn gte<V>(&self, value: V) -> Filter
     where
         V: IntoQueryValue,
     {
-        Filter::field(
-            self.name,
-            FilterOp::Gte(value.into_query_value()),
-        )
+        Filter::field(self.name, FilterOp::Gte(value.into_query_value()))
     }
 
     pub fn lt<V>(&self, value: V) -> Filter
     where
         V: IntoQueryValue,
     {
-        Filter::field(
-            self.name,
-            FilterOp::Lt(value.into_query_value()),
-        )
+        Filter::field(self.name, FilterOp::Lt(value.into_query_value()))
     }
 
     pub fn lte<V>(&self, value: V) -> Filter
     where
         V: IntoQueryValue,
     {
-        Filter::field(
-            self.name,
-            FilterOp::Lte(value.into_query_value()),
-        )
+        Filter::field(self.name, FilterOp::Lte(value.into_query_value()))
     }
 
     pub fn contains<V>(&self, value: V) -> Filter
     where
         V: IntoQueryValue,
     {
-        Filter::field(
-            self.name,
-            FilterOp::Contains(value.into_query_value()),
-        )
+        Filter::field(self.name, FilterOp::Contains(value.into_query_value()))
     }
 
     pub fn starts_with<V>(&self, value: V) -> Filter
     where
         V: IntoQueryValue,
     {
-        Filter::field(
-            self.name,
-            FilterOp::StartsWith(value.into_query_value()),
-        )
+        Filter::field(self.name, FilterOp::StartsWith(value.into_query_value()))
     }
 
     pub fn ends_with<V>(&self, value: V) -> Filter
     where
         V: IntoQueryValue,
     {
-        Filter::field(
-            self.name,
-            FilterOp::EndsWith(value.into_query_value()),
-        )
+        Filter::field(self.name, FilterOp::EndsWith(value.into_query_value()))
     }
 
     pub fn text_search<V>(&self, value: V) -> Filter
     where
         V: IntoQueryValue,
     {
-        Filter::field(
-            self.name,
-            FilterOp::TextSearch(value.into_query_value()),
-        )
+        Filter::field(self.name, FilterOp::TextSearch(value.into_query_value()))
     }
 
     pub fn is_null(&self) -> Filter {
-        Filter::field(
-            self.name,
-            FilterOp::IsNull,
-        )
+        Filter::field(self.name, FilterOp::IsNull)
     }
 
     pub fn is_not_null(&self) -> Filter {
-        Filter::field(
-            self.name,
-            FilterOp::IsNotNull,
-        )
+        Filter::field(self.name, FilterOp::IsNotNull)
     }
 
     pub fn asc(&self) -> Sort {
@@ -336,10 +300,7 @@ impl<M, T> EncodedField<M, T> {
             encoded.push(self.encode_value(value)?);
         }
 
-        Ok(Filter::field(
-            self.name,
-            FilterOp::In(encoded),
-        ))
+        Ok(Filter::field(self.name, FilterOp::In(encoded)))
     }
 
     pub fn gt(&self, value: T) -> Result<Filter, DatabaseError> {
@@ -399,17 +360,11 @@ impl<M, T> EncodedField<M, T> {
     }
 
     pub fn is_null(&self) -> Filter {
-        Filter::field(
-            self.name,
-            FilterOp::IsNull,
-        )
+        Filter::field(self.name, FilterOp::IsNull)
     }
 
     pub fn is_not_null(&self) -> Filter {
-        Filter::field(
-            self.name,
-            FilterOp::IsNotNull,
-        )
+        Filter::field(self.name, FilterOp::IsNotNull)
     }
 
     pub fn asc(&self) -> Sort {

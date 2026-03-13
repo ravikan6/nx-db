@@ -269,7 +269,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ── 4.5 COMPLEX LOGIC — and/or/not ───────────────────────────────────────
     separator("4.5 Complex Logic — and(), or(), not()");
 
-    let mut logic_stats = Stats::new("Complex Query: content ~ 'production' AND (author ~ 'user_0' OR author ~ 'user_1')");
+    let mut logic_stats = Stats::new(
+        "Complex Query: content ~ 'production' AND (author ~ 'user_0' OR author ~ 'user_1')",
+    );
     for _ in 0..50 {
         let q = db_query!(
             filter: nx_db::and!(
@@ -284,7 +286,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let start = Instant::now();
         let results = post_repo.find(q).await?;
         logic_stats.push(start.elapsed());
-        // In this benchmark setup, authors are like 'user_0', 'user_1', etc. 
+        // In this benchmark setup, authors are like 'user_0', 'user_1', etc.
         // Wait, the make_posts function uses 'r{round}_post_{uid}_{j}' but author is just uid.
         // Let's check how authors are named in make_users.
     }

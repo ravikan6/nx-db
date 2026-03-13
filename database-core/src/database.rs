@@ -2460,7 +2460,9 @@ mod tests {
                         ordering.is_lt() || ordering.is_eq()
                     }
                     FilterOp::Contains(expected) => match (value, expected) {
-                        (Some(StorageValue::String(s)), StorageValue::String(sub)) => s.contains(sub),
+                        (Some(StorageValue::String(s)), StorageValue::String(sub)) => {
+                            s.contains(sub)
+                        }
                         _ => false,
                     },
                     FilterOp::StartsWith(expected) => match (value, expected) {
@@ -2488,7 +2490,9 @@ mod tests {
             crate::query::Filter::And(filters) => {
                 filters.iter().all(|f| Self::matches_filter(record, f))
             }
-            crate::query::Filter::Or(filters) => filters.iter().any(|f| Self::matches_filter(record, f)),
+            crate::query::Filter::Or(filters) => {
+                filters.iter().any(|f| Self::matches_filter(record, f))
+            }
             crate::query::Filter::Not(filter) => !Self::matches_filter(record, filter),
         }
     }

@@ -186,7 +186,6 @@ where
             ),
         ));
 
-
         let related: Vec<RM::Entity> = repo.find(query).await?;
         let mut map = std::collections::HashMap::with_capacity(related.len());
         for rel in related {
