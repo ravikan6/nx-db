@@ -1,6 +1,6 @@
 #![cfg(feature = "postgres")]
 
-use nx_db::PostgresAdapter;
+use driver_postgres::PostgresAdapter;
 use nx_db::traits::storage::StorageRecord;
 use nx_db::{
     AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, Database,
@@ -49,7 +49,6 @@ struct RestrictedUserEntity {
     id: Key<32>,
     name: String,
 }
-
 
 #[derive(Debug, Clone)]
 struct CreateRestrictedUser {

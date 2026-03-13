@@ -1,7 +1,7 @@
 use crate::{CacheBackend, CacheError, CacheFuture, CacheKey, CacheWrite, Namespace};
 use bytes::Bytes;
-use moka::future::Cache;
 use moka::Expiry;
+use moka::future::Cache;
 use parking_lot::RwLock;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 struct MemoryCacheExpiry;
 
-// Use a very long duration for "never expire" since returning None 
+// Use a very long duration for "never expire" since returning None
 // can sometimes lead to using builder-level defaults if they existed.
 const NEVER_EXPIRE: Duration = Duration::from_secs(100 * 365 * 24 * 60 * 60);
 

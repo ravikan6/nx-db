@@ -15,8 +15,8 @@ pub mod traits;
 pub mod utils;
 pub mod value;
 
-pub use context::*;
 pub use crate::database::*;
+pub use context::*;
 pub use enums::*;
 pub use errors::*;
 pub use events::*;

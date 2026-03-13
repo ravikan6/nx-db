@@ -23,7 +23,7 @@ pub enum FilterOp {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Filter {
-    pub field: String,
+    pub field: &'static str,
     pub op: FilterOp,
 }
 
@@ -35,7 +35,7 @@ pub enum SortDirection {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Sort {
-    pub field: String,
+    pub field: &'static str,
     pub direction: SortDirection,
 }
 
@@ -126,7 +126,7 @@ impl<M, T> Field<M, T> {
         V: IntoQueryValue,
     {
         Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::Eq(value.into_query_value()),
         }
     }
@@ -136,7 +136,7 @@ impl<M, T> Field<M, T> {
         V: IntoQueryValue,
     {
         Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::NotEq(value.into_query_value()),
         }
     }
@@ -147,7 +147,7 @@ impl<M, T> Field<M, T> {
         V: IntoQueryValue,
     {
         Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::In(
                 values
                     .into_iter()
@@ -162,7 +162,7 @@ impl<M, T> Field<M, T> {
         V: IntoQueryValue,
     {
         Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::Gt(value.into_query_value()),
         }
     }
@@ -172,7 +172,7 @@ impl<M, T> Field<M, T> {
         V: IntoQueryValue,
     {
         Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::Gte(value.into_query_value()),
         }
     }
@@ -182,7 +182,7 @@ impl<M, T> Field<M, T> {
         V: IntoQueryValue,
     {
         Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::Lt(value.into_query_value()),
         }
     }
@@ -192,7 +192,7 @@ impl<M, T> Field<M, T> {
         V: IntoQueryValue,
     {
         Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::Lte(value.into_query_value()),
         }
     }
@@ -202,7 +202,7 @@ impl<M, T> Field<M, T> {
         V: IntoQueryValue,
     {
         Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::Contains(value.into_query_value()),
         }
     }
@@ -212,7 +212,7 @@ impl<M, T> Field<M, T> {
         V: IntoQueryValue,
     {
         Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::StartsWith(value.into_query_value()),
         }
     }
@@ -222,7 +222,7 @@ impl<M, T> Field<M, T> {
         V: IntoQueryValue,
     {
         Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::EndsWith(value.into_query_value()),
         }
     }
@@ -232,35 +232,35 @@ impl<M, T> Field<M, T> {
         V: IntoQueryValue,
     {
         Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::TextSearch(value.into_query_value()),
         }
     }
 
     pub fn is_null(&self) -> Filter {
         Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::IsNull,
         }
     }
 
     pub fn is_not_null(&self) -> Filter {
         Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::IsNotNull,
         }
     }
 
     pub fn asc(&self) -> Sort {
         Sort {
-            field: self.name.to_string(),
+            field: self.name,
             direction: SortDirection::Asc,
         }
     }
 
     pub fn desc(&self) -> Sort {
         Sort {
-            field: self.name.to_string(),
+            field: self.name,
             direction: SortDirection::Desc,
         }
     }
@@ -295,14 +295,14 @@ impl<M, T> EncodedField<M, T> {
 
     pub fn eq(&self, value: T) -> Result<Filter, DatabaseError> {
         Ok(Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::Eq(self.encode_value(value)?),
         })
     }
 
     pub fn not_eq(&self, value: T) -> Result<Filter, DatabaseError> {
         Ok(Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::NotEq(self.encode_value(value)?),
         })
     }
@@ -317,91 +317,91 @@ impl<M, T> EncodedField<M, T> {
         }
 
         Ok(Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::In(encoded),
         })
     }
 
     pub fn gt(&self, value: T) -> Result<Filter, DatabaseError> {
         Ok(Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::Gt(self.encode_value(value)?),
         })
     }
 
     pub fn gte(&self, value: T) -> Result<Filter, DatabaseError> {
         Ok(Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::Gte(self.encode_value(value)?),
         })
     }
 
     pub fn lt(&self, value: T) -> Result<Filter, DatabaseError> {
         Ok(Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::Lt(self.encode_value(value)?),
         })
     }
 
     pub fn lte(&self, value: T) -> Result<Filter, DatabaseError> {
         Ok(Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::Lte(self.encode_value(value)?),
         })
     }
 
     pub fn contains(&self, value: T) -> Result<Filter, DatabaseError> {
         Ok(Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::Contains(self.encode_value(value)?),
         })
     }
 
     pub fn starts_with(&self, value: T) -> Result<Filter, DatabaseError> {
         Ok(Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::StartsWith(self.encode_value(value)?),
         })
     }
 
     pub fn ends_with(&self, value: T) -> Result<Filter, DatabaseError> {
         Ok(Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::EndsWith(self.encode_value(value)?),
         })
     }
 
     pub fn text_search(&self, value: T) -> Result<Filter, DatabaseError> {
         Ok(Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::TextSearch(self.encode_value(value)?),
         })
     }
 
     pub fn is_null(&self) -> Filter {
         Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::IsNull,
         }
     }
 
     pub fn is_not_null(&self) -> Filter {
         Filter {
-            field: self.name.to_string(),
+            field: self.name,
             op: FilterOp::IsNotNull,
         }
     }
 
     pub fn asc(&self) -> Sort {
         Sort {
-            field: self.name.to_string(),
+            field: self.name,
             direction: SortDirection::Asc,
         }
     }
 
     pub fn desc(&self) -> Sort {
         Sort {
-            field: self.name.to_string(),
+            field: self.name,
             direction: SortDirection::Desc,
         }
     }

@@ -7,7 +7,9 @@ macro_rules! db_context {
         $crate::Context::default().with_role($role)
     };
     (schema: $schema:expr, role: $role:expr) => {
-        $crate::Context::default().with_schema($schema).with_role($role)
+        $crate::Context::default()
+            .with_schema($schema)
+            .with_role($role)
     };
     (tenant: $tenant:expr) => {
         $crate::Context::default().with_tenant_id($tenant)

@@ -1,6 +1,6 @@
+pub use core::*;
 pub use database_cache as cache;
 pub use database_core as core;
-pub use core::*;
 
 #[cfg(feature = "postgres")]
 pub mod postgres {
@@ -11,10 +11,7 @@ pub mod postgres {
 }
 
 pub mod prelude {
-    pub use crate::core::{
-        Context, Database, Key, Model, QuerySpec, Repository, Role,
-    };
+    pub use crate::core::{Context, Database, Key, Model, QuerySpec, Repository, Role};
     #[cfg(feature = "postgres")]
     pub use crate::postgres::PostgresAdapter;
 }
-

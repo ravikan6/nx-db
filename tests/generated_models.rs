@@ -117,7 +117,10 @@ impl StorageAdapter for FakeAdapter {
                     Some(StorageValue::String(value)) => value.clone(),
                     _ => return Err(DatabaseError::Other("missing id".into())),
                 };
-                locked.insert((schema_name.clone(), collection.clone(), id), record.clone());
+                locked.insert(
+                    (schema_name.clone(), collection.clone(), id),
+                    record.clone(),
+                );
             }
             Ok(values)
         })
@@ -202,7 +205,11 @@ impl StorageAdapter for FakeAdapter {
 
             for (key, record) in locked.iter() {
                 if key.0 == schema_name && key.1 == collection {
-                    if query.filters().iter().all(|filter| matches_filter(record, filter)) {
+                    if query
+                        .filters()
+                        .iter()
+                        .all(|filter| matches_filter(record, filter))
+                    {
                         to_update.push(key.clone());
                     }
                 }
@@ -239,7 +246,11 @@ impl StorageAdapter for FakeAdapter {
 
             for (key, record) in locked.iter() {
                 if key.0 == schema_name && key.1 == collection {
-                    if query.filters().iter().all(|filter| matches_filter(record, filter)) {
+                    if query
+                        .filters()
+                        .iter()
+                        .all(|filter| matches_filter(record, filter))
+                    {
                         to_delete.push(key.clone());
                     }
                 }
@@ -315,7 +326,7 @@ impl StorageAdapter for FakeAdapter {
 }
 
 fn matches_filter(record: &StorageRecord, filter: &Filter) -> bool {
-    let value = record.get(&filter.field);
+    let value = record.get(&filter.field.to_string());
 
     match &filter.op {
         FilterOp::Eq(expected) => value == Some(expected),
@@ -344,7 +355,9 @@ fn matches_filter(record: &StorageRecord, filter: &Filter) -> bool {
             _ => false,
         },
         FilterOp::TextSearch(expected) => match (value, expected) {
-            (Some(StorageValue::String(s)), StorageValue::String(query)) => s.to_lowercase().contains(&query.to_lowercase()),
+            (Some(StorageValue::String(s)), StorageValue::String(query)) => {
+                s.to_lowercase().contains(&query.to_lowercase())
+            }
             _ => false,
         },
         FilterOp::IsNull => matches!(value, None | Some(StorageValue::Null)),

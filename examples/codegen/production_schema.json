@@ -36,6 +36,13 @@
             "onDelete": "restrict"
           }
         }
+      ],
+      "indexes": [
+        {
+          "id": "full_text_content",
+          "kind": "fulltext",
+          "attributes": ["content"]
+        }
       ]
     }
   ]

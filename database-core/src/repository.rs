@@ -95,8 +95,13 @@ where
         self.database.insert_model::<M>(&self.context, input).await
     }
 
-    pub async fn insert_many(&self, inputs: Vec<M::Create>) -> Result<Vec<M::Entity>, DatabaseError> {
-        self.database.insert_many_models::<M>(&self.context, inputs).await
+    pub async fn insert_many(
+        &self,
+        inputs: Vec<M::Create>,
+    ) -> Result<Vec<M::Entity>, DatabaseError> {
+        self.database
+            .insert_many_models::<M>(&self.context, inputs)
+            .await
     }
 
     pub async fn get(&self, id: &M::Id) -> Result<Option<M::Entity>, DatabaseError> {
@@ -128,7 +133,9 @@ where
     }
 
     pub async fn delete_many(&self, query: QuerySpec) -> Result<u64, DatabaseError> {
-        self.database.delete_many_models::<M>(&self.context, &query).await
+        self.database
+            .delete_many_models::<M>(&self.context, &query)
+            .await
     }
 
     pub async fn find(&self, query: QuerySpec) -> Result<Vec<M::Entity>, DatabaseError> {
@@ -171,7 +178,7 @@ where
         let repo = self.database.scope(self.context.clone()).repo::<RM>();
         let mut query = QuerySpec::new();
         query = query.filter(crate::query::Filter {
-            field: crate::system_fields::FIELD_ID.to_string(),
+            field: crate::system_fields::FIELD_ID,
             op: crate::query::FilterOp::In(
                 keys.into_iter()
                     .map(crate::traits::storage::StorageValue::String)
@@ -192,7 +199,7 @@ where
     pub async fn load_one_to_many<RM>(
         &self,
         entities: &[M::Entity],
-        foreign_key_field: &str,
+        foreign_key_field: &'static str,
         extract_local_key: impl Fn(&M::Entity) -> String,
         extract_related_foreign_key: impl Fn(&RM::Entity) -> Option<String>,
     ) -> Result<std::collections::HashMap<String, Vec<RM::Entity>>, DatabaseError>
@@ -212,7 +219,7 @@ where
         let repo = self.database.scope(self.context.clone()).repo::<RM>();
         let mut query = QuerySpec::new();
         query = query.filter(crate::query::Filter {
-            field: foreign_key_field.to_string(),
+            field: foreign_key_field,
             op: crate::query::FilterOp::In(
                 keys.into_iter()
                     .map(crate::traits::storage::StorageValue::String)
@@ -221,7 +228,8 @@ where
         });
 
         let related: Vec<RM::Entity> = repo.find(query).await?;
-        let mut map: std::collections::HashMap<String, Vec<RM::Entity>> = std::collections::HashMap::new();
+        let mut map: std::collections::HashMap<String, Vec<RM::Entity>> =
+            std::collections::HashMap::new();
 
         for rel in related {
             if let Some(fk) = extract_related_foreign_key(&rel) {

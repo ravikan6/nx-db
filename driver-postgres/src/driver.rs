@@ -44,7 +44,10 @@ impl<'a> PostgresAdapter<'a> {
         Ok(format!("\"{identifier}\""))
     }
 
-    pub(crate) fn qualified_table_name(context: &Context, collection: &str) -> Result<String, DatabaseError> {
+    pub(crate) fn qualified_table_name(
+        context: &Context,
+        collection: &str,
+    ) -> Result<String, DatabaseError> {
         let schema = Self::quote_identifier(context.schema())?;
         let collection = Self::quote_identifier(collection)?;
         Ok(format!("{schema}.{collection}"))
@@ -167,8 +170,8 @@ impl<'a> PostgresAdapter<'a> {
         }
 
         Ok(format!(
-            "to_tsvector('simple', concat_ws(' ', {}))",
-            parts.join(", ")
+            "to_tsvector('simple', {})",
+            parts.join(" || ' ' || ")
         ))
     }
 
@@ -612,7 +615,7 @@ impl<'a> PostgresAdapter<'a> {
                 Self::push_bind_value(builder, value)?;
             }
             FilterOp::Contains(value) => {
-                // In Postgres, string containment uses LIKE '%value%' or ILIKE. 
+                // In Postgres, string containment uses LIKE '%value%' or ILIKE.
                 // For a robust driver, let's assume we use standard LIKE with wildcard appending
                 // However, since `value` is pushed via `push_bind_value`, we need a way to wrap it.
                 // The easiest way is to cast column to text and use LIKE '%' || $1 || '%'
@@ -1069,7 +1072,10 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                     if !first {
                         builder.push(" UNION ALL ");
                     }
-                    builder.push("SELECT (SELECT _sequence FROM inserted), ");
+                    builder.push(format!(
+                        "SELECT (SELECT {} FROM inserted), ",
+                        Self::quoted_system_column(COLUMN_SEQUENCE)?
+                    ));
                     builder.push_bind(pt);
                     builder.push(", ");
                     builder.push_bind(pv);
@@ -1077,7 +1083,6 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                 }
                 builder.push(") ");
             }
-
 
             builder.push("SELECT * FROM inserted");
 
@@ -1153,9 +1158,13 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
 
                 builder.push_values(group_records, |mut separated, record| {
                     let uid = Self::extract_string(&record, FIELD_ID).unwrap_or_default();
-                    let created_at = Self::extract_optional_timestamp(&record, FIELD_CREATED_AT).unwrap_or_default();
-                    let updated_at = Self::extract_optional_timestamp(&record, FIELD_UPDATED_AT).unwrap_or_default();
-                    let permissions = Self::extract_optional_string_array(&record, FIELD_PERMISSIONS).unwrap_or_default();
+                    let created_at = Self::extract_optional_timestamp(&record, FIELD_CREATED_AT)
+                        .unwrap_or_default();
+                    let updated_at = Self::extract_optional_timestamp(&record, FIELD_UPDATED_AT)
+                        .unwrap_or_default();
+                    let permissions =
+                        Self::extract_optional_string_array(&record, FIELD_PERMISSIONS)
+                            .unwrap_or_default();
 
                     separated.push_bind(uid);
                     separated.push_bind(created_at);
@@ -1174,7 +1183,7 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                 });
 
                 builder.push(format!(
-                    " RETURNING {}, {} ", 
+                    " RETURNING {}, {} ",
                     Self::quoted_system_column(COLUMN_SEQUENCE)?,
                     Self::quoted_system_column(COLUMN_ID)?
                 ));
@@ -1183,7 +1192,7 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                 let perms_table = Self::qualified_permissions_table_name(&context, schema.id)?;
 
                 let mut perm_data_count = 0;
-                
+
                 for (permissions, record) in &row_data {
                     let uid = Self::extract_string(record, FIELD_ID).unwrap_or_default();
                     let grouped = Self::permission_rows(permissions)?;
@@ -1215,16 +1224,18 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                     builder.push(" = p.uid) ");
                 }
 
-
                 builder.push("SELECT * FROM inserted ORDER BY ");
                 builder.push(Self::quoted_system_column(COLUMN_SEQUENCE)?);
                 builder.push(" ASC");
 
                 let rows = builder.build().fetch_all(pool).await.map_err(|error| {
-                    DatabaseError::Other(format!("postgres single-roundtrip insert_many failed: {error}"))
+                    DatabaseError::Other(format!(
+                        "postgres single-roundtrip insert_many failed: {error}"
+                    ))
                 })?;
 
-                for (row, (_permissions, mut record)) in rows.into_iter().zip(row_data.into_iter()) {
+                for (row, (_permissions, mut record)) in rows.into_iter().zip(row_data.into_iter())
+                {
                     let sequence = row.try_get::<i64, _>(COLUMN_SEQUENCE).map_err(|error| {
                         DatabaseError::Other(format!("postgres sequence read failed: {error}"))
                     })?;
@@ -1235,9 +1246,8 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
             }
 
             Ok(results)
-            })
-            }
-
+        })
+    }
 
     fn get(
         &self,
@@ -1343,9 +1353,9 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
             if permissions_update {
                 let perms_table = Self::qualified_permissions_table_name(&context, schema.id)?;
                 let grouped_perms = Self::permission_rows(&permissions)?;
-                
+
                 builder.push(format!(", clear_perms AS (DELETE FROM {perms_table} WHERE document_id = (SELECT _sequence FROM updated))"));
-                
+
                 if !grouped_perms.is_empty() {
                     builder.push(format!(", sync_perms AS (INSERT INTO {perms_table} (document_id, permission_type, permissions) "));
                     let mut first = true;
@@ -1361,14 +1371,19 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                     }
                     builder.push(") ");
                 }
-
             }
 
             builder.push("SELECT * FROM updated");
 
-            let row = builder.build().fetch_optional(pool).await.map_err(|error| {
-                DatabaseError::Other(format!("postgres single-roundtrip update failed: {error}"))
-            })?;
+            let row = builder
+                .build()
+                .fetch_optional(pool)
+                .await
+                .map_err(|error| {
+                    DatabaseError::Other(format!(
+                        "postgres single-roundtrip update failed: {error}"
+                    ))
+                })?;
 
             let Some(row) = row else {
                 return Ok(None);
@@ -1414,7 +1429,7 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                 &permissions,
                 &attributes,
             )?;
-            
+
             let mut has_conditions = false;
             Self::push_document_action_condition(
                 &mut builder,
@@ -1424,7 +1439,7 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                 PermissionEnum::Update,
                 &mut has_conditions,
             )?;
-            
+
             for filter in query.filters() {
                 Self::push_condition_separator(&mut builder, &mut has_conditions);
                 Self::push_filter(&mut builder, schema, filter)?;
@@ -1439,9 +1454,9 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
             if permissions_update {
                 let perms_table = Self::qualified_permissions_table_name(&context, schema.id)?;
                 let grouped_perms = Self::permission_rows(&permissions)?;
-                
+
                 builder.push(format!(", clear_perms AS (DELETE FROM {perms_table} WHERE document_id IN (SELECT _sequence FROM updated))"));
-                
+
                 if !grouped_perms.is_empty() {
                     builder.push(format!(", sync_perms AS (INSERT INTO {perms_table} (document_id, permission_type, permissions) "));
                     builder.push("SELECT updated._sequence, p.pt, p.pv FROM updated, ");
@@ -1460,13 +1475,14 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                     }
                     builder.push(") AS p) ");
                 }
-
             }
 
             builder.push("SELECT COUNT(*) FROM updated");
 
             let row = builder.build().fetch_one(pool).await.map_err(|error| {
-                DatabaseError::Other(format!("postgres single-roundtrip update_many failed: {error}"))
+                DatabaseError::Other(format!(
+                    "postgres single-roundtrip update_many failed: {error}"
+                ))
             })?;
 
             Ok(row.try_get::<i64, _>(0).unwrap_or(0) as u64)
@@ -1528,7 +1544,7 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
 
             let table = Self::qualified_table_name(&context, schema.id)?;
             let mut builder = QueryBuilder::<Postgres>::new(format!("DELETE FROM {table} AS main"));
-            
+
             let mut has_conditions = false;
             Self::push_document_action_condition(
                 &mut builder,
@@ -1538,7 +1554,7 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                 PermissionEnum::Delete,
                 &mut has_conditions,
             )?;
-            
+
             for filter in query.filters() {
                 Self::push_condition_separator(&mut builder, &mut has_conditions);
                 Self::push_filter(&mut builder, schema, filter)?;
@@ -1549,7 +1565,9 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                 .execute(pool)
                 .await
                 .map(|result| result.rows_affected())
-                .map_err(|error| DatabaseError::Other(format!("postgres delete_many failed: {error}")))
+                .map_err(|error| {
+                    DatabaseError::Other(format!("postgres delete_many failed: {error}"))
+                })
         })
     }
 

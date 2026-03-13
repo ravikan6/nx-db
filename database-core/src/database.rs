@@ -77,8 +77,12 @@ impl<A, R, E> DatabaseBuilder<A, R, E> {
 
     pub fn build(self) -> Result<Database<A, R, E>, DatabaseError> {
         Ok(Database {
-            adapter: self.adapter.ok_or_else(|| DatabaseError::Other("adapter is required".into()))?,
-            registry: self.registry.ok_or_else(|| DatabaseError::Other("registry is required".into()))?,
+            adapter: self
+                .adapter
+                .ok_or_else(|| DatabaseError::Other("adapter is required".into()))?,
+            registry: self
+                .registry
+                .ok_or_else(|| DatabaseError::Other("registry is required".into()))?,
             events: self.events,
             cache: self.cache,
         })
@@ -369,7 +373,8 @@ where
         let mut encoded_records = Vec::with_capacity(inputs.len());
         for input in inputs {
             let record = M::create_to_record(input, context)?;
-            let encoded = self.prepare_record_for_storage::<M>(context, collection, record, false)?;
+            let encoded =
+                self.prepare_record_for_storage::<M>(context, collection, record, false)?;
             encoded_records.push(encoded);
         }
 
@@ -599,7 +604,10 @@ where
 
         let mut entities = Vec::with_capacity(filtered.len());
         for record in filtered {
-            entities.push(self.materialize_entity_fast::<M>(context, collection, record, false).await?);
+            entities.push(
+                self.materialize_entity_fast::<M>(context, collection, record, false)
+                    .await?,
+            );
         }
 
         Ok(entities)
@@ -657,7 +665,9 @@ where
                 .adapter
                 .enforces_document_filtering(PermissionEnum::Update)
         {
-            return Err(DatabaseError::Other("update_many is not supported without adapter-level document filtering".to_string()));
+            return Err(DatabaseError::Other(
+                "update_many is not supported without adapter-level document filtering".to_string(),
+            ));
         }
 
         let record = M::update_to_record(input, context)?;
@@ -670,7 +680,8 @@ where
 
         if updated > 0 {
             if let Some(cache) = &self.cache {
-                let namespace = database_cache::Namespace::new(collection.id).expect("valid namespace");
+                let namespace =
+                    database_cache::Namespace::new(collection.id).expect("valid namespace");
                 let _ = cache.clear_namespace(&namespace).await;
             }
         }
@@ -696,14 +707,17 @@ where
                 .adapter
                 .enforces_document_filtering(PermissionEnum::Delete)
         {
-            return Err(DatabaseError::Other("delete_many is not supported without adapter-level document filtering".to_string()));
+            return Err(DatabaseError::Other(
+                "delete_many is not supported without adapter-level document filtering".to_string(),
+            ));
         }
 
         let deleted = self.adapter.delete_many(context, collection, query).await?;
 
         if deleted > 0 {
             if let Some(cache) = &self.cache {
-                let namespace = database_cache::Namespace::new(collection.id).expect("valid namespace");
+                let namespace =
+                    database_cache::Namespace::new(collection.id).expect("valid namespace");
                 let _ = cache.clear_namespace(&namespace).await;
             }
         }
@@ -720,7 +734,8 @@ where
         M: Model,
     {
         let collection = self.collection(M::schema().id)?;
-        self.materialize_entity_fast::<M>(context, collection, record, true).await
+        self.materialize_entity_fast::<M>(context, collection, record, true)
+            .await
     }
 
     pub(crate) async fn materialize_entity_fast<M>(
@@ -753,13 +768,16 @@ where
     {
         if !partial {
             let now = time::OffsetDateTime::now_utc();
-            record.entry(crate::system_fields::FIELD_CREATED_AT.to_string())
+            record
+                .entry(crate::system_fields::FIELD_CREATED_AT.to_string())
                 .or_insert(StorageValue::Timestamp(now));
-            record.entry(crate::system_fields::FIELD_UPDATED_AT.to_string())
+            record
+                .entry(crate::system_fields::FIELD_UPDATED_AT.to_string())
                 .or_insert(StorageValue::Timestamp(now));
         } else {
             let now = time::OffsetDateTime::now_utc();
-            record.entry(crate::system_fields::FIELD_UPDATED_AT.to_string())
+            record
+                .entry(crate::system_fields::FIELD_UPDATED_AT.to_string())
                 .or_insert(StorageValue::Timestamp(now));
         }
 
@@ -1193,7 +1211,10 @@ mod tests {
                             ));
                         }
                     };
-                    locked.insert((schema_name.clone(), collection.clone(), id), record.clone());
+                    locked.insert(
+                        (schema_name.clone(), collection.clone(), id),
+                        record.clone(),
+                    );
                 }
                 Ok(values)
             })
@@ -1278,7 +1299,11 @@ mod tests {
 
                 for (key, record) in locked.iter() {
                     if key.0 == schema_name && key.1 == collection {
-                        if query.filters().iter().all(|filter| matches_filter(record, filter)) {
+                        if query
+                            .filters()
+                            .iter()
+                            .all(|filter| matches_filter(record, filter))
+                        {
                             to_update.push(key.clone());
                         }
                     }
@@ -1315,7 +1340,11 @@ mod tests {
 
                 for (key, record) in locked.iter() {
                     if key.0 == schema_name && key.1 == collection {
-                        if query.filters().iter().all(|filter| matches_filter(record, filter)) {
+                        if query
+                            .filters()
+                            .iter()
+                            .all(|filter| matches_filter(record, filter))
+                        {
                             to_delete.push(key.clone());
                         }
                     }
@@ -2389,7 +2418,7 @@ mod tests {
     }
 
     fn matches_filter(record: &StorageRecord, filter: &crate::query::Filter) -> bool {
-        let value = record.get(&filter.field);
+        let value = record.get(&filter.field.to_string());
 
         match &filter.op {
             FilterOp::Eq(expected) => value == Some(expected),
@@ -2412,15 +2441,21 @@ mod tests {
                 _ => false,
             },
             FilterOp::StartsWith(expected) => match (value, expected) {
-                (Some(StorageValue::String(s)), StorageValue::String(prefix)) => s.starts_with(prefix),
+                (Some(StorageValue::String(s)), StorageValue::String(prefix)) => {
+                    s.starts_with(prefix)
+                }
                 _ => false,
             },
             FilterOp::EndsWith(expected) => match (value, expected) {
-                (Some(StorageValue::String(s)), StorageValue::String(suffix)) => s.ends_with(suffix),
+                (Some(StorageValue::String(s)), StorageValue::String(suffix)) => {
+                    s.ends_with(suffix)
+                }
                 _ => false,
             },
             FilterOp::TextSearch(expected) => match (value, expected) {
-                (Some(StorageValue::String(s)), StorageValue::String(query)) => s.to_lowercase().contains(&query.to_lowercase()),
+                (Some(StorageValue::String(s)), StorageValue::String(query)) => {
+                    s.to_lowercase().contains(&query.to_lowercase())
+                }
                 _ => false,
             },
             FilterOp::IsNull => matches!(value, None | Some(StorageValue::Null)),

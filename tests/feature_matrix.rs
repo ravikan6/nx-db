@@ -5,11 +5,17 @@ fn workspace_root() -> PathBuf {
 }
 
 fn target_dir(label: &str) -> PathBuf {
-    workspace_root().join("target").join("feature-matrix").join(label)
+    workspace_root()
+        .join("target")
+        .join("feature-matrix")
+        .join(label)
 }
 
 fn temp_dir(label: &str) -> PathBuf {
-    workspace_root().join("target").join("feature-matrix-tmp").join(label)
+    workspace_root()
+        .join("target")
+        .join("feature-matrix-tmp")
+        .join(label)
 }
 
 fn run_check(args: &[&str], label: &str) {

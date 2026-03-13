@@ -1,18 +1,30 @@
+use crate::driver::PostgresAdapter;
 use database_core::errors::DatabaseError;
 use database_core::traits::migration::{MigrationCollection, MigrationIndex};
 use database_core::{
-    AttributePersistence, Context, IndexKind, Order,
-    COLUMN_CREATED_AT, COLUMN_ID, COLUMN_PERMISSIONS, COLUMN_SEQUENCE, COLUMN_UPDATED_AT,
+    AttributePersistence, COLUMN_CREATED_AT, COLUMN_ID, COLUMN_PERMISSIONS, COLUMN_SEQUENCE,
+    COLUMN_UPDATED_AT, Context, IndexKind, Order,
 };
-use crate::driver::PostgresAdapter;
-use sqlx::{Pool, Postgres, Row, Executor};
+use sqlx::{Executor, Pool, Postgres, Row};
 use std::collections::BTreeMap;
 
 pub enum MigrationChange {
     CreateTable(String),
-    AddColumn { table: String, column: String, sql_type: String, required: bool },
-    CreateIndex { table: String, index_id: String, sql: String },
-    DropIndex { table: String, index_id: String },
+    AddColumn {
+        table: String,
+        column: String,
+        sql_type: String,
+        required: bool,
+    },
+    CreateIndex {
+        table: String,
+        index_id: String,
+        sql: String,
+    },
+    DropIndex {
+        table: String,
+        index_id: String,
+    },
 }
 
 pub struct MigrationEngine<'a> {
@@ -24,7 +36,11 @@ impl<'a> MigrationEngine<'a> {
         Self { pool }
     }
 
-    pub async fn migrate(&self, context: &Context, collections: &[&dyn MigrationCollection]) -> Result<(), DatabaseError> {
+    pub async fn migrate(
+        &self,
+        context: &Context,
+        collections: &[&dyn MigrationCollection],
+    ) -> Result<(), DatabaseError> {
         let changes = self.diff(context, collections).await?;
         for change in changes {
             self.apply_change(context, change, collections).await?;
@@ -32,7 +48,11 @@ impl<'a> MigrationEngine<'a> {
         Ok(())
     }
 
-    pub async fn diff(&self, context: &Context, collections: &[&dyn MigrationCollection]) -> Result<Vec<MigrationChange>, DatabaseError> {
+    pub async fn diff(
+        &self,
+        context: &Context,
+        collections: &[&dyn MigrationCollection],
+    ) -> Result<Vec<MigrationChange>, DatabaseError> {
         let mut all_changes = Vec::new();
         for collection in collections {
             all_changes.extend(self.diff_collection(context, *collection).await?);
@@ -40,11 +60,15 @@ impl<'a> MigrationEngine<'a> {
         Ok(all_changes)
     }
 
-    async fn diff_collection(&self, context: &Context, collection: &dyn MigrationCollection) -> Result<Vec<MigrationChange>, DatabaseError> {
+    async fn diff_collection(
+        &self,
+        context: &Context,
+        collection: &dyn MigrationCollection,
+    ) -> Result<Vec<MigrationChange>, DatabaseError> {
         let mut changes = Vec::new();
         let table_name = collection.id();
         let db_schema = context.schema();
-        
+
         let exists: bool = sqlx::query(
             "SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2)"
         )
@@ -76,7 +100,9 @@ impl<'a> MigrationEngine<'a> {
         let existing_columns: BTreeMap<String, String> = columns.into_iter().collect();
 
         for attr in collection.attributes() {
-            if attr.persistence == AttributePersistence::Persisted && !existing_columns.contains_key(&attr.column) {
+            if attr.persistence == AttributePersistence::Persisted
+                && !existing_columns.contains_key(&attr.column)
+            {
                 changes.push(MigrationChange::AddColumn {
                     table: table_name.to_string(),
                     column: attr.column.to_string(),
@@ -93,7 +119,7 @@ impl<'a> MigrationEngine<'a> {
              JOIN pg_class c ON c.oid = x.indrelid
              JOIN pg_class i ON i.oid = x.indexrelid
              JOIN pg_namespace n ON n.oid = c.relnamespace
-             WHERE c.relname = $1 AND n.nspname = $2"
+             WHERE c.relname = $1 AND n.nspname = $2",
         )
         .bind(table_name)
         .bind(db_schema)
@@ -144,30 +170,55 @@ impl<'a> MigrationEngine<'a> {
         Ok(changes)
     }
 
-    async fn apply_change(&self, context: &Context, change: MigrationChange, collections: &[&dyn MigrationCollection]) -> Result<(), DatabaseError> {
+    async fn apply_change(
+        &self,
+        context: &Context,
+        change: MigrationChange,
+        collections: &[&dyn MigrationCollection],
+    ) -> Result<(), DatabaseError> {
         match change {
             MigrationChange::CreateTable(table_id) => {
-                let collection = collections.iter().find(|c| c.id() == table_id).ok_or_else(|| {
-                    DatabaseError::Other(format!("Collection {} not found in migration source", table_id))
-                })?;
+                let collection =
+                    collections
+                        .iter()
+                        .find(|c| c.id() == table_id)
+                        .ok_or_else(|| {
+                            DatabaseError::Other(format!(
+                                "Collection {} not found in migration source",
+                                table_id
+                            ))
+                        })?;
                 self.create_collection_generic(context, *collection).await
             }
-            MigrationChange::AddColumn { table, column, sql_type, required } => {
+            MigrationChange::AddColumn {
+                table,
+                column,
+                sql_type,
+                required,
+            } => {
                 let table_name = PostgresAdapter::qualified_table_name(context, &table)?;
                 let column_name = PostgresAdapter::quote_identifier(&column)?;
                 let nullable = if required { "NOT NULL" } else { "" };
-                let sql = format!("ALTER TABLE {} ADD COLUMN {} {} {}", 
-                    table_name, column_name, sql_type, nullable);
-                
+                let sql = format!(
+                    "ALTER TABLE {} ADD COLUMN {} {} {}",
+                    table_name, column_name, sql_type, nullable
+                );
+
                 println!("Executing: {}", sql);
-                self.pool.execute(sql.as_str()).await.map_err(|e| DatabaseError::Other(format!("failed to add column: {e}")))?;
+                self.pool
+                    .execute(sql.as_str())
+                    .await
+                    .map_err(|e| DatabaseError::Other(format!("failed to add column: {e}")))?;
                 Ok(())
             }
             MigrationChange::CreateIndex { sql, .. } => {
                 let sql = sql.replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ");
                 let sql = sql.replace("CREATE UNIQUE INDEX ", "CREATE UNIQUE INDEX IF NOT EXISTS ");
                 println!("Executing: {}", sql);
-                self.pool.execute(sql.as_str()).await.map_err(|e| DatabaseError::Other(format!("failed to create index: {e}")))?;
+                self.pool
+                    .execute(sql.as_str())
+                    .await
+                    .map_err(|e| DatabaseError::Other(format!("failed to create index: {e}")))?;
                 Ok(())
             }
             MigrationChange::DropIndex { index_id, .. } => {
@@ -175,15 +226,23 @@ impl<'a> MigrationEngine<'a> {
                 let index_name = PostgresAdapter::quote_identifier(&index_id)?;
                 let sql = format!("DROP INDEX IF EXISTS {}.{}", schema_name, index_name);
                 println!("Executing: {}", sql);
-                self.pool.execute(sql.as_str()).await.map_err(|e| DatabaseError::Other(format!("failed to drop index: {e}")))?;
+                self.pool
+                    .execute(sql.as_str())
+                    .await
+                    .map_err(|e| DatabaseError::Other(format!("failed to drop index: {e}")))?;
                 Ok(())
             }
         }
     }
 
-    async fn create_collection_generic(&self, context: &Context, collection: &dyn MigrationCollection) -> Result<(), DatabaseError> {
+    async fn create_collection_generic(
+        &self,
+        context: &Context,
+        collection: &dyn MigrationCollection,
+    ) -> Result<(), DatabaseError> {
         let table = PostgresAdapter::qualified_table_name(context, collection.id())?;
-        let perms_table = PostgresAdapter::qualified_permissions_table_name(context, collection.id())?;
+        let perms_table =
+            PostgresAdapter::qualified_permissions_table_name(context, collection.id())?;
 
         let mut statements = vec![
             format!(
@@ -216,7 +275,9 @@ impl<'a> MigrationEngine<'a> {
                 let column = PostgresAdapter::quote_identifier(&attr.column)?;
                 let sql_type = PostgresAdapter::sql_type(attr.kind, attr.array);
                 let nullable = if attr.required { "NOT NULL" } else { "" };
-                statements.push(format!("ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {sql_type} {nullable}"));
+                statements.push(format!(
+                    "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {sql_type} {nullable}"
+                ));
             }
         }
 
@@ -243,15 +304,24 @@ impl<'a> MigrationEngine<'a> {
         ));
         statements.push(format!(
             "CREATE INDEX IF NOT EXISTS {} ON {perms_table} USING GIN (permissions)",
-            PostgresAdapter::quote_identifier(&format!("{}_perms_permissions_gin_idx", collection.id()))?
+            PostgresAdapter::quote_identifier(&format!(
+                "{}_perms_permissions_gin_idx",
+                collection.id()
+            ))?
         ));
         statements.push(format!(
             "CREATE INDEX IF NOT EXISTS {} ON {perms_table} (permission_type)",
-            PostgresAdapter::quote_identifier(&format!("{}_perms_permission_type_idx", collection.id()))?
+            PostgresAdapter::quote_identifier(&format!(
+                "{}_perms_permission_type_idx",
+                collection.id()
+            ))?
         ));
         statements.push(format!(
             "CREATE INDEX IF NOT EXISTS {} ON {perms_table} (document_id)",
-            PostgresAdapter::quote_identifier(&format!("{}_perms_document_id_idx", collection.id()))?
+            PostgresAdapter::quote_identifier(&format!(
+                "{}_perms_document_id_idx",
+                collection.id()
+            ))?
         ));
 
         // Schema indexes
@@ -259,9 +329,9 @@ impl<'a> MigrationEngine<'a> {
             let index_name = PostgresAdapter::quote_identifier(&index.id)?;
             let col_list = self.quoted_column_list_generic(collection, &index)?;
             let statement = match index.kind {
-                IndexKind::Key => format!(
-                    "CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({col_list})"
-                ),
+                IndexKind::Key => {
+                    format!("CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({col_list})")
+                }
                 IndexKind::Unique => format!(
                     "CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {table} ({col_list})"
                 ),
@@ -279,21 +349,41 @@ impl<'a> MigrationEngine<'a> {
             statements.push(statement);
         }
 
-        let mut tx = self.pool.begin().await.map_err(|e| DatabaseError::Other(format!("failed to start transaction: {e}")))?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| DatabaseError::Other(format!("failed to start transaction: {e}")))?;
         for statement in statements {
-            tx.execute(statement.as_str()).await.map_err(|e| DatabaseError::Other(format!("failed to execute statement: {e}")))?;
+            tx.execute(statement.as_str())
+                .await
+                .map_err(|e| DatabaseError::Other(format!("failed to execute statement: {e}")))?;
         }
-        tx.commit().await.map_err(|e| DatabaseError::Other(format!("failed to commit transaction: {e}")))?;
+        tx.commit()
+            .await
+            .map_err(|e| DatabaseError::Other(format!("failed to commit transaction: {e}")))?;
 
         Ok(())
     }
 
-    fn quoted_column_list_generic(&self, collection: &dyn MigrationCollection, index: &MigrationIndex) -> Result<String, DatabaseError> {
+    fn quoted_column_list_generic(
+        &self,
+        collection: &dyn MigrationCollection,
+        index: &MigrationIndex,
+    ) -> Result<String, DatabaseError> {
         let mut out = Vec::with_capacity(index.attributes.len());
         for (i, attribute_id) in index.attributes.iter().enumerate() {
-            let attr = collection.attributes().into_iter().find(|a| a.id == *attribute_id).ok_or_else(|| {
-                DatabaseError::Other(format!("index references unknown attribute '{}.{}'", collection.id(), attribute_id))
-            })?;
+            let attr = collection
+                .attributes()
+                .into_iter()
+                .find(|a| a.id == *attribute_id)
+                .ok_or_else(|| {
+                    DatabaseError::Other(format!(
+                        "index references unknown attribute '{}.{}'",
+                        collection.id(),
+                        attribute_id
+                    ))
+                })?;
             let mut column = PostgresAdapter::quote_identifier(&attr.column)?;
             if let Some(order) = index.orders.get(i) {
                 match order {
@@ -307,19 +397,31 @@ impl<'a> MigrationEngine<'a> {
         Ok(out.join(", "))
     }
 
-    fn full_text_expression_generic(&self, collection: &dyn MigrationCollection, attributes: &[String]) -> Result<String, DatabaseError> {
+    fn full_text_expression_generic(
+        &self,
+        collection: &dyn MigrationCollection,
+        attributes: &[String],
+    ) -> Result<String, DatabaseError> {
         let mut parts = Vec::with_capacity(attributes.len());
         for attribute_id in attributes {
-            let attr = collection.attributes().into_iter().find(|a| a.id == *attribute_id).ok_or_else(|| {
-                DatabaseError::Other(format!("index references unknown attribute '{}.{}'", collection.id(), attribute_id))
-            })?;
+            let attr = collection
+                .attributes()
+                .into_iter()
+                .find(|a| a.id == *attribute_id)
+                .ok_or_else(|| {
+                    DatabaseError::Other(format!(
+                        "index references unknown attribute '{}.{}'",
+                        collection.id(),
+                        attribute_id
+                    ))
+                })?;
             let column = PostgresAdapter::quote_identifier(&attr.column)?;
             parts.push(format!("COALESCE({column}::text, '')"));
         }
 
         Ok(format!(
-            "to_tsvector('simple', concat_ws(' ', {}))",
-            parts.join(", ")
+            "to_tsvector('simple', {})",
+            parts.join(" || ' ' || ")
         ))
     }
 }
