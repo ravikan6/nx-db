@@ -64,20 +64,26 @@ impl<'a> PostgresAdapter<'a> {
         Self::quote_identifier(identifier)
     }
 
-    pub(crate) fn sql_type(kind: AttributeKind, array: bool) -> String {
+    pub(crate) fn sql_type(kind: AttributeKind, array: bool, length: Option<usize>) -> String {
         let base = match kind {
-            AttributeKind::String | AttributeKind::Relationship | AttributeKind::Virtual => "TEXT",
-            AttributeKind::Integer => "BIGINT",
-            AttributeKind::Float => "DOUBLE PRECISION",
-            AttributeKind::Boolean => "BOOLEAN",
-            AttributeKind::Timestamp => "TIMESTAMPTZ",
-            AttributeKind::Json => "JSONB",
+            AttributeKind::String | AttributeKind::Relationship | AttributeKind::Virtual => {
+                if let Some(len) = length {
+                    format!("VARCHAR({len})")
+                } else {
+                    "TEXT".to_string()
+                }
+            }
+            AttributeKind::Integer => "BIGINT".to_string(),
+            AttributeKind::Float => "DOUBLE PRECISION".to_string(),
+            AttributeKind::Boolean => "BOOLEAN".to_string(),
+            AttributeKind::Timestamp => "TIMESTAMPTZ".to_string(),
+            AttributeKind::Json => "JSONB".to_string(),
         };
 
         if array {
             format!("{base}[]")
         } else {
-            base.to_string()
+            base
         }
     }
 
@@ -982,7 +988,7 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
 
             for attribute in Self::persisted_attributes(schema) {
                 let column = Self::quote_identifier(attribute.column)?;
-                let sql_type = Self::sql_type(attribute.kind, attribute.array);
+                let sql_type = Self::sql_type(attribute.kind, attribute.array, attribute.length);
                 let required = if attribute.required { " NOT NULL" } else { "" };
 
                 columns.push(format!("{column} {sql_type}{required}"));

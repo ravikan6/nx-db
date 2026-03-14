@@ -5,7 +5,7 @@
 #[allow(unused_imports)]
 pub mod prod_models {
     use nx_db::traits::storage::StorageRecord;
-    use nx_db::{insert_value, take_optional, get_optional, take_required, get_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, Field, Key, Model, Patch, QuerySpec, RelationshipKind, RelationshipSchema, RelationshipSide, StaticRegistry, FIELD_ID, FIELD_SEQUENCE, FIELD_CREATED_AT, FIELD_UPDATED_AT, FIELD_PERMISSIONS};
+    use nx_db::{insert_value, take_optional, take_required, get_optional, get_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, Field, Key, Model, Patch, QuerySpec, RelationshipKind, RelationshipSchema, RelationshipSide, StaticRegistry, FIELD_ID, FIELD_SEQUENCE, FIELD_CREATED_AT, FIELD_UPDATED_AT, FIELD_PERMISSIONS};
 
     pub type UserId = Key<32>;
 
@@ -51,6 +51,7 @@ pub mod prod_models {
             kind: AttributeKind::String,
             required: true,
             array: false,
+            length: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
@@ -61,6 +62,7 @@ pub mod prod_models {
             kind: AttributeKind::String,
             required: true,
             array: false,
+            length: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
@@ -71,12 +73,12 @@ pub mod prod_models {
             kind: AttributeKind::Json,
             required: false,
             array: false,
+            length: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
         },
     ];
-
     const USERS_INDEXES: &[nx_db::IndexSchema] = &[
         nx_db::IndexSchema {
             id: "users_email_unique",
@@ -85,78 +87,14 @@ pub mod prod_models {
             orders: &[],
         },
     ];
-
-    pub static USERS_SCHEMA: CollectionSchema = CollectionSchema {
-        id: "users",
-        name: "Users",
-        document_security: true,
-        enabled: true,
-        permissions: &["read(\"any\")", "create(\"any\")"],
-        attributes: USERS_ATTRIBUTES,
-        indexes: USERS_INDEXES,
-    };
-
+    pub static USERS_SCHEMA: CollectionSchema = CollectionSchema { id: "users", name: "Users", document_security: true, enabled: true, permissions: &["read(\"any\")", "create(\"any\")"], attributes: USERS_ATTRIBUTES, indexes: USERS_INDEXES };
     impl User {
         pub const ID: Field<User, UserId> = Field::new(FIELD_ID);
         pub const NAME: Field<User, String> = Field::new("name");
         pub const EMAIL: Field<User, String> = Field::new("email");
         pub const METADATA: Field<User, Option<String>> = Field::new("metadata");
     }
-
-    impl Model for User {
-        type Id = UserId;
-        type Entity = UserEntity;
-        type Create = CreateUser;
-        type Update = UpdateUser;
-
-        fn schema() -> &'static CollectionSchema {
-            &USERS_SCHEMA
-        }
-
-        fn entity_to_id(entity: &Self::Entity) -> &Self::Id {
-            &entity.id
-        }
-
-        fn entity_metadata(entity: &Self::Entity) -> &nx_db::Metadata {
-            &entity._metadata
-        }
-
-        fn create_to_record(input: Self::Create, _context: &Context) -> Result<StorageRecord, DatabaseError> {
-            let mut record = StorageRecord::new();
-            insert_value(&mut record, FIELD_ID, input.id);
-            insert_value(&mut record, FIELD_PERMISSIONS, input.permissions);
-            insert_value(&mut record, "name", input.name);
-            insert_value(&mut record, "email", input.email);
-            if let Some(value) = input.metadata { insert_value(&mut record, "metadata", value); }
-            Ok(record)
-        }
-
-        fn update_to_record(input: Self::Update, _context: &Context) -> Result<StorageRecord, DatabaseError> {
-            let mut record = StorageRecord::new();
-            if let Patch::Set(value) = input.permissions { insert_value(&mut record, FIELD_PERMISSIONS, value); }
-            if let Patch::Set(value) = input.name { insert_value(&mut record, "name", value); }
-            if let Patch::Set(value) = input.email { insert_value(&mut record, "email", value); }
-            if let Patch::Set(value) = input.metadata { insert_value(&mut record, "metadata", value); }
-            Ok(record)
-        }
-
-        fn entity_from_record(mut record: StorageRecord, _context: &Context) -> Result<Self::Entity, DatabaseError> {
-            Ok(UserEntity {
-                _metadata: nx_db::Metadata {
-                    sequence: get_required(&record, FIELD_SEQUENCE)?,
-                    uid: get_required(&record, FIELD_ID)?,
-                    created_at: get_required(&record, FIELD_CREATED_AT)?,
-                    updated_at: get_required(&record, FIELD_UPDATED_AT)?,
-                    permissions: get_required(&record, FIELD_PERMISSIONS)?,
-                },
-                id: take_required(&mut record, FIELD_ID)?,
-                name: take_optional(&mut record, "name")?.unwrap_or_default(),
-                email: take_optional(&mut record, "email")?.unwrap_or_default(),
-                metadata: take_optional(&mut record, "metadata")?,
-            })
-        }
-    }
-
+    nx_db::impl_model! { name: User, id: UserId, entity: UserEntity, create: CreateUser, update: UpdateUser, schema: USERS_SCHEMA, fields: {                 "name" => name : String,                 "email" => email : String,                 "metadata" => metadata : Option<String> } }
     pub type PostId = Key<32>;
 
     #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
@@ -201,6 +139,7 @@ pub mod prod_models {
             kind: AttributeKind::String,
             required: true,
             array: false,
+            length: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
@@ -211,6 +150,7 @@ pub mod prod_models {
             kind: AttributeKind::String,
             required: false,
             array: false,
+            length: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
@@ -221,6 +161,7 @@ pub mod prod_models {
             kind: AttributeKind::Relationship,
             required: true,
             array: false,
+            length: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: Some(nx_db::RelationshipSchema {
@@ -233,7 +174,6 @@ pub mod prod_models {
             }),
         },
     ];
-
     const POSTS_INDEXES: &[nx_db::IndexSchema] = &[
         nx_db::IndexSchema {
             id: "full_text_content",
@@ -242,78 +182,14 @@ pub mod prod_models {
             orders: &[],
         },
     ];
-
-    pub static POSTS_SCHEMA: CollectionSchema = CollectionSchema {
-        id: "posts",
-        name: "Posts",
-        document_security: true,
-        enabled: true,
-        permissions: &["read(\"any\")", "create(\"any\")"],
-        attributes: POSTS_ATTRIBUTES,
-        indexes: POSTS_INDEXES,
-    };
-
+    pub static POSTS_SCHEMA: CollectionSchema = CollectionSchema { id: "posts", name: "Posts", document_security: true, enabled: true, permissions: &["read(\"any\")", "create(\"any\")"], attributes: POSTS_ATTRIBUTES, indexes: POSTS_INDEXES };
     impl Post {
         pub const ID: Field<Post, PostId> = Field::new(FIELD_ID);
         pub const TITLE: Field<Post, String> = Field::new("title");
         pub const CONTENT: Field<Post, Option<String>> = Field::new("content");
         pub const AUTHOR: Field<Post, String> = Field::new("author");
     }
-
-    impl Model for Post {
-        type Id = PostId;
-        type Entity = PostEntity;
-        type Create = CreatePost;
-        type Update = UpdatePost;
-
-        fn schema() -> &'static CollectionSchema {
-            &POSTS_SCHEMA
-        }
-
-        fn entity_to_id(entity: &Self::Entity) -> &Self::Id {
-            &entity.id
-        }
-
-        fn entity_metadata(entity: &Self::Entity) -> &nx_db::Metadata {
-            &entity._metadata
-        }
-
-        fn create_to_record(input: Self::Create, _context: &Context) -> Result<StorageRecord, DatabaseError> {
-            let mut record = StorageRecord::new();
-            insert_value(&mut record, FIELD_ID, input.id);
-            insert_value(&mut record, FIELD_PERMISSIONS, input.permissions);
-            insert_value(&mut record, "title", input.title);
-            if let Some(value) = input.content { insert_value(&mut record, "content", value); }
-            insert_value(&mut record, "author", input.author);
-            Ok(record)
-        }
-
-        fn update_to_record(input: Self::Update, _context: &Context) -> Result<StorageRecord, DatabaseError> {
-            let mut record = StorageRecord::new();
-            if let Patch::Set(value) = input.permissions { insert_value(&mut record, FIELD_PERMISSIONS, value); }
-            if let Patch::Set(value) = input.title { insert_value(&mut record, "title", value); }
-            if let Patch::Set(value) = input.content { insert_value(&mut record, "content", value); }
-            if let Patch::Set(value) = input.author { insert_value(&mut record, "author", value); }
-            Ok(record)
-        }
-
-        fn entity_from_record(mut record: StorageRecord, _context: &Context) -> Result<Self::Entity, DatabaseError> {
-            Ok(PostEntity {
-                _metadata: nx_db::Metadata {
-                    sequence: get_required(&record, FIELD_SEQUENCE)?,
-                    uid: get_required(&record, FIELD_ID)?,
-                    created_at: get_required(&record, FIELD_CREATED_AT)?,
-                    updated_at: get_required(&record, FIELD_UPDATED_AT)?,
-                    permissions: get_required(&record, FIELD_PERMISSIONS)?,
-                },
-                id: take_required(&mut record, FIELD_ID)?,
-                title: take_optional(&mut record, "title")?.unwrap_or_default(),
-                content: take_optional(&mut record, "content")?,
-                author: take_optional(&mut record, "author")?.unwrap_or_default(),
-            })
-        }
-    }
-
+    nx_db::impl_model! { name: Post, id: PostId, entity: PostEntity, create: CreatePost, update: UpdatePost, schema: POSTS_SCHEMA, fields: {                 "title" => title : String,                 "content" => content : Option<String>,                 "author" => author : String } }
     pub fn registry() -> Result<StaticRegistry, DatabaseError> {
         let registry = StaticRegistry::new()
             .register(&USERS_SCHEMA)?

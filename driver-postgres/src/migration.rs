@@ -106,7 +106,7 @@ impl<'a> MigrationEngine<'a> {
                 changes.push(MigrationChange::AddColumn {
                     table: table_name.to_string(),
                     column: attr.column.to_string(),
-                    sql_type: PostgresAdapter::sql_type(attr.kind, attr.array),
+                    sql_type: PostgresAdapter::sql_type(attr.kind, attr.array, attr.length),
                     required: attr.required,
                 });
             }
@@ -273,7 +273,7 @@ impl<'a> MigrationEngine<'a> {
         for attr in collection.attributes() {
             if attr.persistence == AttributePersistence::Persisted {
                 let column = PostgresAdapter::quote_identifier(&attr.column)?;
-                let sql_type = PostgresAdapter::sql_type(attr.kind, attr.array);
+                let sql_type = PostgresAdapter::sql_type(attr.kind, attr.array, attr.length);
                 let nullable = if attr.required { "NOT NULL" } else { "" };
                 statements.push(format!(
                     "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {sql_type} {nullable}"

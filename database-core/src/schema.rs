@@ -132,6 +132,7 @@ pub struct AttributeSchema {
     pub kind: AttributeKind,
     pub required: bool,
     pub array: bool,
+    pub length: Option<usize>,
     pub persistence: AttributePersistence,
     pub filters: &'static [&'static str],
     pub relationship: Option<RelationshipSchema>,
@@ -166,17 +167,15 @@ impl crate::traits::migration::MigrationCollection for &'static CollectionSchema
         self.id
     }
     fn attributes(&self) -> Vec<crate::traits::migration::MigrationAttribute> {
-        self.attributes
-            .iter()
-            .map(|a| crate::traits::migration::MigrationAttribute {
-                id: a.id.to_string(),
-                column: a.column.to_string(),
-                kind: a.kind,
-                required: a.required,
-                array: a.array,
-                persistence: a.persistence,
-            })
-            .collect()
+        self.attributes.iter().map(|a| crate::traits::migration::MigrationAttribute {
+            id: a.id.to_string(),
+            column: a.column.to_string(),
+            kind: a.kind,
+            required: a.required,
+            array: a.array,
+            length: a.length,
+            persistence: a.persistence,
+        }).collect()
     }
     fn indexes(&self) -> Vec<crate::traits::migration::MigrationIndex> {
         self.indexes

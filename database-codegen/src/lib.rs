@@ -97,6 +97,8 @@ pub struct AttributeSpec {
     #[serde(default)]
     pub array: bool,
     #[serde(default)]
+    pub length: Option<usize>,
+    #[serde(default)]
     pub filters: Vec<String>,
     #[serde(default)]
     pub resolver: Option<String>,
@@ -458,12 +460,7 @@ pub fn generate(spec: &ProjectSpec) -> Result<String, CodegenError> {
 
     writeln!(
         &mut out,
-        "    use nx_db::{{insert_value, {}take_required, get_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, {}Field, Key, Model, Patch, QuerySpec, RelationshipKind, RelationshipSchema, RelationshipSide, StaticRegistry, FIELD_ID, FIELD_SEQUENCE, FIELD_CREATED_AT, FIELD_UPDATED_AT, FIELD_PERMISSIONS}};",
-        if needs_take_optional {
-            "take_optional, get_optional, "
-        } else {
-            ""
-        },
+        "    use nx_db::{{insert_value, take_optional, take_required, get_optional, get_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, {}Field, Key, Model, Patch, QuerySpec, RelationshipKind, RelationshipSchema, RelationshipSide, StaticRegistry, FIELD_ID, FIELD_SEQUENCE, FIELD_CREATED_AT, FIELD_UPDATED_AT, FIELD_PERMISSIONS}};",
         optional_imports
     )
     .unwrap();
@@ -701,6 +698,15 @@ fn emit_collection(
         writeln!(out, "            array: {},", attribute.array).unwrap();
         writeln!(
             out,
+            "            length: {},",
+            attribute
+                .length
+                .map(|l| format!("Some({})", l))
+                .unwrap_or_else(|| "None".to_string())
+        )
+        .unwrap();
+        writeln!(
+            out,
             "            persistence: AttributePersistence::{},",
             if attribute.kind == AttributeKindSpec::Virtual {
                 "Virtual"
@@ -767,8 +773,6 @@ fn emit_collection(
         writeln!(out, "        }},").unwrap();
     }
     writeln!(out, "    ];").unwrap();
-    writeln!(out).unwrap();
-
     writeln!(out, "    const {indexes_const}: &[nx_db::IndexSchema] = &[").unwrap();
     for index in &collection.indexes {
         writeln!(out, "        nx_db::IndexSchema {{").unwrap();
@@ -799,271 +803,57 @@ fn emit_collection(
         writeln!(out, "        }},").unwrap();
     }
     writeln!(out, "    ];").unwrap();
-    writeln!(out).unwrap();
-
-    writeln!(
-        out,
-        "    pub static {schema_const}: CollectionSchema = CollectionSchema {{"
-    )
-    .unwrap();
-    writeln!(out, "        id: \"{}\",", collection.id).unwrap();
-    writeln!(
-        out,
-        "        name: \"{}\",",
-        escape_string(&collection.name)
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "        document_security: {},",
-        collection.document_security
-    )
-    .unwrap();
-    writeln!(out, "        enabled: true,").unwrap();
-    writeln!(
-        out,
-        "        permissions: &[{}],",
-        collection
-            .permissions
-            .iter()
-            .map(|value| format!("\"{}\"", escape_string(value)))
-            .collect::<Vec<_>>()
-            .join(", ")
-    )
-    .unwrap();
-    writeln!(out, "        attributes: {attrs_const},").unwrap();
-    writeln!(out, "        indexes: {indexes_const},").unwrap();
-    writeln!(out, "    }};").unwrap();
-    writeln!(out).unwrap();
+    writeln!(out, "    pub static {schema_const}: CollectionSchema = CollectionSchema {{ id: \"{}\", name: \"{}\", document_security: {}, enabled: true, permissions: &[{}], attributes: {attrs_const}, indexes: {indexes_const} }};", 
+        collection.id, escape_string(&collection.name), collection.document_security,
+        collection.permissions.iter().map(|p| format!("\"{}\"", escape_string(p))).collect::<Vec<_>>().join(", ")
+    ).unwrap();
 
     writeln!(out, "    impl {model_name} {{").unwrap();
-    writeln!(
-        out,
-        "        pub const ID: Field<{model_name}, {id_name}> = Field::new(FIELD_ID);"
-    )
-    .unwrap();
+    writeln!(out, "        pub const ID: Field<{model_name}, {id_name}> = Field::new(FIELD_ID);").unwrap();
     for attribute in &collection.attributes {
-        if attribute.kind == AttributeKindSpec::Virtual {
-            continue;
-        }
+        if attribute.kind == AttributeKindSpec::Virtual { continue; }
         let const_name = screaming_snake(&attribute.id);
         if attribute.filters.is_empty() {
-            let query_type = query_field_type(attribute);
-            writeln!(
-                out,
-                "        pub const {const_name}: Field<{model_name}, {}> = Field::new(\"{}\");",
-                query_type, attribute.id
-            )
-            .unwrap();
+            writeln!(out, "        pub const {const_name}: Field<{model_name}, {}> = Field::new(\"{}\");", query_field_type(attribute), attribute.id).unwrap();
         } else {
             let public_type = filtered_query_field_type(&filters_by_name, collection, attribute)?;
-            writeln!(
-                out,
-                "        pub const {const_name}: EncodedField<{model_name}, {}> = EncodedField::new(\"{}\", encode_query_{}_{});",
-                public_type,
-                attribute.id,
-                rust_field_name(&model_name),
-                rust_field_name(&attribute.id)
-            )
-            .unwrap();
+            writeln!(out, "        pub const {const_name}: EncodedField<{model_name}, {}> = EncodedField::new(\"{}\", encode_query_{}_{});",
+                public_type, attribute.id, rust_field_name(&model_name), rust_field_name(&attribute.id)).unwrap();
         }
     }
     writeln!(out, "    }}").unwrap();
-    writeln!(out).unwrap();
 
-    writeln!(out, "    impl Model for {model_name} {{").unwrap();
-    writeln!(out, "        type Id = {id_name};").unwrap();
-    writeln!(out, "        type Entity = {entity_name};").unwrap();
-    writeln!(out, "        type Create = {create_name};").unwrap();
-    writeln!(out, "        type Update = {update_name};").unwrap();
-    writeln!(out).unwrap();
-    writeln!(out, "        fn schema() -> &'static CollectionSchema {{").unwrap();
-    writeln!(out, "            &{schema_const}").unwrap();
-    writeln!(out, "        }}").unwrap();
-    writeln!(out).unwrap();
-    writeln!(
-        out,
-        "        fn entity_to_id(entity: &Self::Entity) -> &Self::Id {{"
-    )
-    .unwrap();
-    writeln!(out, "            &entity.id").unwrap();
-    writeln!(out, "        }}").unwrap();
-    writeln!(out).unwrap();
-
-    writeln!(
-        out,
-        "        fn entity_metadata(entity: &Self::Entity) -> &nx_db::Metadata {{"
-    )
-    .unwrap();
-    writeln!(out, "            &entity._metadata").unwrap();
-    writeln!(out, "        }}").unwrap();
-    writeln!(out).unwrap();
-
-    writeln!(
-        out,
-        "        fn create_to_record(input: Self::Create, _context: &Context) -> Result<StorageRecord, DatabaseError> {{"
-    )
-    .unwrap();
-    writeln!(out, "            let mut record = StorageRecord::new();").unwrap();
-    writeln!(
-        out,
-        "            insert_value(&mut record, FIELD_ID, input.id);"
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "            insert_value(&mut record, FIELD_PERMISSIONS, input.permissions);"
-    )
-    .unwrap();
+    let mut attribute_lines = Vec::new();
     for attribute in &collection.attributes {
-        if attribute.kind == AttributeKindSpec::Virtual {
-            continue;
-        }
-        let field = rust_field_name(&attribute.id);
-        let value_expr = if attribute.filters.is_empty() {
-            format!("input.{field}")
+        if attribute.kind == AttributeKindSpec::Virtual { continue; }
+        let field_id = &attribute.id;
+        let field_name = rust_field_name(&attribute.id);
+        let storage_type = query_field_type(attribute);
+        if let Some(decoder) = attribute.filters.first().map(|_| decode_helper_name(&model_name, &attribute.id)) {
+             attribute_lines.push(format!("                \"{}\" => {} : {} [{}]", field_id, field_name, storage_type, decoder));
         } else {
-            format!(
-                "{}(input.{field})?",
-                encode_helper_name(&model_name, &attribute.id)
-            )
-        };
-        if attribute.required {
-            writeln!(
-                out,
-                "            insert_value(&mut record, \"{}\", {value_expr});",
-                attribute.id,
-            )
-            .unwrap();
-        } else {
-            let encoded_optional = if attribute.filters.is_empty() {
-                "value".to_string()
-            } else {
-                format!("{}(value)?", encode_helper_name(&model_name, &attribute.id))
-            };
-            writeln!(
-                out,
-                "            if let Some(value) = input.{field} {{ insert_value(&mut record, \"{}\", {encoded_optional}); }}",
-                attribute.id,
-            )
-            .unwrap();
+             attribute_lines.push(format!("                \"{}\" => {} : {}", field_id, field_name, storage_type));
         }
     }
-    writeln!(out, "            Ok(record)").unwrap();
-    writeln!(out, "        }}").unwrap();
-    writeln!(out).unwrap();
 
-    writeln!(
-        out,
-        "        fn update_to_record(input: Self::Update, _context: &Context) -> Result<StorageRecord, DatabaseError> {{"
-    )
-    .unwrap();
-    writeln!(out, "            let mut record = StorageRecord::new();").unwrap();
-    writeln!(out, "            if let Patch::Set(value) = input.permissions {{ insert_value(&mut record, FIELD_PERMISSIONS, value); }}").unwrap();
-    for attribute in &collection.attributes {
-        if attribute.kind == AttributeKindSpec::Virtual {
-            continue;
-        }
-        let field = rust_field_name(&attribute.id);
-        let set_value = if attribute.filters.is_empty() {
-            "value".to_string()
-        } else {
-            format!("{}(value)?", encode_helper_name(&model_name, &attribute.id))
-        };
-        writeln!(
-            out,
-            "            if let Patch::Set(value) = input.{field} {{ insert_value(&mut record, \"{}\", {set_value}); }}",
-            attribute.id,
-        )
-        .unwrap();
-    }
-    writeln!(out, "            Ok(record)").unwrap();
-    writeln!(out, "        }}").unwrap();
-    writeln!(out).unwrap();
+    writeln!(out, "    nx_db::impl_model! {{ name: {}, id: {}, entity: {}, create: {}, update: {}, schema: {}, fields: {{ {} }} }}",
+        model_name, id_name, entity_name, create_name, update_name, schema_const, attribute_lines.join(", ")
+    ).unwrap();
 
-    writeln!(
-        out,
-        "        fn entity_from_record(mut record: StorageRecord, _context: &Context) -> Result<Self::Entity, DatabaseError> {{"
-    )
-    .unwrap();
-    writeln!(out, "            Ok({entity_name} {{").unwrap();
-    writeln!(
-        out,
-        "                _metadata: nx_db::Metadata {{
-                    sequence: get_required(&record, FIELD_SEQUENCE)?,
-                    uid: get_required(&record, FIELD_ID)?,
-                    created_at: get_required(&record, FIELD_CREATED_AT)?,
-                    updated_at: get_required(&record, FIELD_UPDATED_AT)?,
-                    permissions: get_required(&record, FIELD_PERMISSIONS)?,
-                }},"
-    )
-    .unwrap();
-    writeln!(
-        out,
-        "                id: take_required(&mut record, FIELD_ID)?,"
-    )
-    .unwrap();
-    for attribute in &collection.attributes {
-        let field = rust_field_name(&attribute.id);
-        let field_value = if attribute.kind == AttributeKindSpec::Virtual {
-            "None".to_string()
-        } else if attribute.filters.is_empty() {
-            let reader = "take_optional"; // Use optional even for required fields to support selection
-            if attribute.required {
-                format!("{reader}(&mut record, \"{}\")?.unwrap_or_default()", attribute.id)
-            } else {
-                format!("{reader}(&mut record, \"{}\")?", attribute.id)
-            }
-        } else {
-            let decoder = decode_helper_name(&model_name, &attribute.id);
-            let storage_type = query_field_type(attribute);
-            if attribute.required {
-                format!(
-                    "take_optional::<{storage_type}>(&mut record, \"{}\")?.map({decoder}).transpose()?.unwrap_or_default()",
-                    attribute.id
-                )
-            } else {
-                format!(
-                    "take_optional::<{storage_type}>(&mut record, \"{}\")?.map({decoder}).transpose()?",
-                    attribute.id
-                )
-            }
-        };
-        writeln!(out, "                {field}: {field_value},").unwrap();
-    }
-    writeln!(out, "            }})").unwrap();
-    writeln!(out, "        }}").unwrap();
-    if collection
-        .attributes
-        .iter()
-        .any(|attribute| attribute.kind == AttributeKindSpec::Virtual)
-    {
-        writeln!(out).unwrap();
-        writeln!(
-            out,
-            "        fn resolve_entity<'a>(mut entity: Self::Entity, context: &'a Context) -> ModelFuture<'a, Result<Self::Entity, DatabaseError>> {{"
-        )
-        .unwrap();
+    if collection.attributes.iter().any(|a| a.kind == AttributeKindSpec::Virtual) {
+        writeln!(out, "    impl {model_name} {{").unwrap();
+        writeln!(out, "        pub async fn resolve_entity<'a>(mut entity: {entity_name}, context: &'a Context) -> ModelFuture<'a, Result<{entity_name}, DatabaseError>> {{").unwrap();
         writeln!(out, "            Box::pin(async move {{").unwrap();
         for attribute in &collection.attributes {
-            if attribute.kind != AttributeKindSpec::Virtual {
-                continue;
-            }
+            if attribute.kind != AttributeKindSpec::Virtual { continue; }
             let field = rust_field_name(&attribute.id);
             let resolver = resolve_attribute_resolver(&resolvers_by_name, collection, attribute)?;
-            writeln!(
-                out,
-                "                entity.{field} = Some({}(&entity, context).await?);",
-                resolver.resolve
-            )
-            .unwrap();
+            writeln!(out, "                entity.{field} = Some({}(&entity, context).await?);", resolver.resolve).unwrap();
         }
-        writeln!(out, "                Ok(entity)").unwrap();
-        writeln!(out, "            }})").unwrap();
+        writeln!(out, "                Ok(entity) }})").unwrap();
         writeln!(out, "        }}").unwrap();
+        writeln!(out, "    }}").unwrap();
     }
-    writeln!(out, "    }}").unwrap();
-    writeln!(out).unwrap();
 
     Ok(())
 }
@@ -1414,6 +1204,7 @@ impl database_core::traits::migration::MigrationCollection for CollectionSpec {
                 },
                 required: a.required,
                 array: a.array,
+                length: a.length,
                 persistence: if a.kind == AttributeKindSpec::Virtual {
                     database_core::AttributePersistence::Virtual
                 } else {

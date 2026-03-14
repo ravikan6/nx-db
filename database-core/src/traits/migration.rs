@@ -13,6 +13,7 @@ pub struct MigrationAttribute {
     pub kind: AttributeKind,
     pub required: bool,
     pub array: bool,
+    pub length: Option<usize>,
     pub persistence: AttributePersistence,
 }
 
