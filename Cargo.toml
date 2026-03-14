@@ -18,7 +18,11 @@ repository = "https://github.com/ravikan6/nx-db"
 [package]
 name = "nx-db"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "A modular Rust database toolkit with core, cache, and Postgres integrations."
+readme = "README.md"
 
 [dependencies]
 database-core = { path = "database-core", version = "0.1.0" }

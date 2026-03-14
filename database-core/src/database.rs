@@ -2,7 +2,7 @@ use crate::Context;
 use crate::errors::DatabaseError;
 use crate::events::{Event, EventBus, NoopEventBus};
 use crate::model::Model;
-use crate::query::{Filter, FilterOp, QuerySpec};
+use crate::query::{Filter, QuerySpec};
 use crate::registry::CollectionRegistry;
 use crate::repository::{Repository, ScopedDatabase};
 use crate::schema::CollectionSchema;
@@ -176,8 +176,12 @@ where
         collection: &'static CollectionSchema,
         record: &StorageRecord,
     ) -> Result<(), DatabaseError> {
-        self.validate_record_fields(collection, record)?;
-        self.validate_required_attributes(collection, record)
+        self.validate_record_fields(collection, record).map_err(|e| {
+            e
+        })?;
+        self.validate_required_attributes(collection, record).map_err(|e| {
+            e
+        })
     }
 
     pub fn validate_partial_record(
@@ -1194,7 +1198,7 @@ mod tests {
             let collection = schema.id.to_string();
 
             Box::pin(async move {
-                let id = match values.get("id") {
+                let id = match values.get(crate::system_fields::FIELD_ID) {
                     Some(StorageValue::String(value)) => value.clone(),
                     _ => {
                         return Err(DatabaseError::Other(
@@ -1224,7 +1228,7 @@ mod tests {
             Box::pin(async move {
                 let mut locked = rows.lock().expect("rows lock");
                 for record in &values {
-                    let id = match record.get("id") {
+                    let id = match record.get(crate::system_fields::FIELD_ID) {
                         Some(StorageValue::String(value)) => value.clone(),
                         _ => {
                             return Err(DatabaseError::Other(
@@ -1562,7 +1566,7 @@ mod tests {
             mut record: StorageRecord,
             _context: &crate::Context,
         ) -> Result<Self::Entity, DatabaseError> {
-            let id = match record.remove("id") {
+            let id = match record.remove(crate::system_fields::FIELD_ID) {
                 Some(StorageValue::String(value)) => Key::<32>::new(value)?,
                 None => match record.remove(crate::FIELD_ID) {
                     Some(StorageValue::String(value)) => Key::<32>::new(value)?,

@@ -50,10 +50,20 @@ pub fn take_required<T>(record: &mut StorageRecord, key: &str) -> Result<T, Data
 where
     T: FromStorage,
 {
-    let value = record
-        .remove(key)
-        .ok_or_else(|| DatabaseError::Other(format!("missing required field '{key}'")))?;
+    let value = record.remove(key).ok_or_else(|| {
+        DatabaseError::Other(format!("missing required field '{key}'"))
+    })?;
     T::from_storage(value)
+}
+
+pub fn get_required<T>(record: &StorageRecord, key: &str) -> Result<T, DatabaseError>
+where
+    T: FromStorage,
+{
+    let value = record.get(key).ok_or_else(|| {
+        DatabaseError::Other(format!("missing required field '{key}'"))
+    })?;
+    T::from_storage(value.clone())
 }
 
 pub fn take_optional<T>(record: &mut StorageRecord, key: &str) -> Result<Option<T>, DatabaseError>
@@ -63,6 +73,16 @@ where
     match record.remove(key) {
         Some(StorageValue::Null) | None => Ok(None),
         Some(value) => T::from_storage(value).map(Some),
+    }
+}
+
+pub fn get_optional<T>(record: &StorageRecord, key: &str) -> Result<Option<T>, DatabaseError>
+where
+    T: FromStorage,
+{
+    match record.get(key) {
+        Some(StorageValue::Null) | None => Ok(None),
+        Some(value) => T::from_storage(value.clone()).map(Some),
     }
 }
 

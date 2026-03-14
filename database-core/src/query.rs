@@ -63,6 +63,7 @@ pub struct Sort {
 pub struct QuerySpec {
     filters: Vec<Filter>,
     sorts: Vec<Sort>,
+    selects: Vec<&'static str>,
     limit: Option<usize>,
     offset: Option<usize>,
 }
@@ -96,6 +97,11 @@ impl QuerySpec {
         self
     }
 
+    pub fn select(mut self, fields: Vec<&'static str>) -> Self {
+        self.selects = fields;
+        self
+    }
+
     pub fn limit(mut self, limit: usize) -> Self {
         self.limit = Some(limit);
         self
@@ -112,6 +118,10 @@ impl QuerySpec {
 
     pub fn sorts(&self) -> &[Sort] {
         &self.sorts
+    }
+
+    pub fn selects(&self) -> &[&'static str] {
+        &self.selects
     }
 
     pub fn limit_value(&self) -> Option<usize> {

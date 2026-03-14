@@ -898,15 +898,22 @@ impl<'a> PostgresAdapter<'a> {
                                 .unwrap_or(StorageValue::Null)
                         }),
                 }
-            }
-            .map_err(|error| {
-                DatabaseError::Other(format!(
-                    "postgres failed decoding '{}.{}': {error}",
-                    schema.id, attribute.id
-                ))
-            })?;
+            };
 
-            record.insert(attribute.id.to_string(), value);
+            match value {
+                Ok(v) => {
+                    record.insert(attribute.id.to_string(), v);
+                }
+                Err(sqlx::Error::ColumnNotFound(_)) => {
+                    // Skip columns not present in the result set (selective query)
+                }
+                Err(error) => {
+                    return Err(DatabaseError::Other(format!(
+                        "postgres failed decoding '{}.{}': {error}",
+                        schema.id, attribute.id
+                    )));
+                }
+            }
         }
 
         Ok(record)

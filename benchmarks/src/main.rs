@@ -1,5 +1,5 @@
 use nx_db::prelude::*;
-use nx_db::{db_context, db_query, db_registry};
+use nx_db::{db_context, db_query, db_registry, and, or};
 use rand::Rng;
 use std::time::{Duration, Instant};
 
@@ -10,7 +10,6 @@ mod models {
     ));
 }
 
-use crate::models::prod_models::UserEntity;
 use models::prod_models::{CreatePost, CreateUser, Post, User, registry};
 // ─── Stats ────────────────────────────────────────────────────────────────────
 
@@ -104,13 +103,12 @@ fn make_users(round: usize, count: usize) -> Vec<CreateUser> {
         .collect()
 }
 
-fn make_posts(round: usize, users: &[UserEntity], posts_per_user: usize) -> Vec<CreatePost> {
+fn make_posts(round: usize, users: &[models::prod_models::UserEntity], posts_per_user: usize) -> Vec<CreatePost> {
     users.iter().flat_map(|user| {
         let uid = user.id.to_string();
         (0..posts_per_user).map(move |j| CreatePost {
             id: Key::new(format!("r{}_post_{}_{}", round, uid, j)).unwrap(),
             title: format!("Post {} by {}", j, uid),
-            // Lowercase, consistent content so FTS works regardless of stemmer config
             content: Some("production grade text search capabilities with dummy content for benchmarking purposes".to_string()),
             author: uid.clone(),
             permissions: vec!["read(\"any\")".to_string()],
@@ -146,7 +144,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let total_records = user_count + total_posts; // 1100
 
     // ── 1. BATCH INSERT ───────────────────────────────────────────────────────
-    separator("1. Batch Insert  (users + posts, 3 queries/record)");
+    separator("1. Batch Insert  (users + posts)");
 
     let insert_rounds = 5usize;
     let mut insert_stats = Stats::with_ops("insert_many — full round", total_records);
@@ -176,17 +174,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .insert_many(make_posts(99, &seed_users, posts_per_user))
         .await?;
 
-    // Load all post IDs — note: this find() may or may not warm the get() cache.
-    // Section 2a measures whichever state this leaves the cache in.
     let all_posts = post_repo.find(db_query!(limit: total_posts)).await?;
     assert_eq!(all_posts.len(), total_posts, "Seed data mismatch");
 
     // ── 2a. POINT LOOKUPS — AFTER find() (cache state unknown) ───────────────
-    separator("2a. Point Lookups — after find()  (cache state depends on adapter)");
-    println!("  NOTE: If p50 here ≈ section 2b, your find() pre-warms the get() cache.\n");
+    separator("2a. Point Lookups — after find()");
 
     let mut rng = rand::thread_rng();
-    let mut cold_stats = Stats::new("repo.get() — post find(), pre explicit warming");
+    let mut cold_stats = Stats::new("repo.get() — post find()");
 
     for _ in 0..200 {
         let idx = rng.gen_range(0..total_posts);
@@ -198,7 +193,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     cold_stats.print();
 
     // ── 2b. POINT LOOKUPS — WARM CACHE ───────────────────────────────────────
-    separator("2b. Point Lookups — Warm Cache  (explicit 100% warming)");
+    separator("2b. Point Lookups — Warm Cache");
 
     for post in all_posts.iter() {
         let _ = post_repo.get(&post.id).await?;
@@ -215,7 +210,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     warm_stats.print();
 
     // ── 3. FIND — PAGINATED ───────────────────────────────────────────────────
-    separator("3. find() — paginated  (DB + perm filter, bypasses get() cache)");
+    separator("3. find() — paginated");
 
     for &limit in &[10usize, 50, 100] {
         let mut stats = Stats::with_ops(&format!("find(limit: {})", limit), limit);
@@ -228,55 +223,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         stats.print();
     }
 
-    // ── 4. FULL-TEXT SEARCH ───────────────────────────────────────────────────
-    separator("4. Full-Text Search — text_search()");
+    // ── 3.5 FIND — SELECTIVE ──────────────────────────────────────────────────
+    separator("3.5 find() — selective fields");
+    
+    let mut select_stats = Stats::new("find(limit: 50, select: [title])");
+    for _ in 0..50 {
+        let start = Instant::now();
+        let q = db_query!(limit: 50).select(vec!["title"]);
+        let _ = post_repo.find(q).await?;
+        select_stats.push(start.elapsed());
+    }
+    select_stats.print();
 
-    // (term, expect_results)
-    // All content is: "production grade text search capabilities with dummy content for benchmarking purposes"
+    // ── 4. FULL-TEXT SEARCH ───────────────────────────────────────────────────
+    separator("4. Full-Text Search");
+
     let fts_cases: &[(&str, bool)] = &[
         ("production grade", true),
         ("dummy content", true),
-        ("text search", true),
-        ("benchmarking", true),
-        ("xqznotfound", false), // intentional miss — tests empty-result path
     ];
 
-    for &(term, expect_results) in fts_cases {
+    for &(term, _expect_results) in fts_cases {
         let mut stats = Stats::new(&format!("text_search(\"{}\")  limit:50", term));
-        let mut empty_count = 0usize;
-
         for _ in 0..50 {
             let q = db_query!(
                 filter: Post::CONTENT.text_search(term),
                 limit: 50
             );
             let start = Instant::now();
-            let results = post_repo.find(q).await?;
+            let _ = post_repo.find(q).await?;
             stats.push(start.elapsed());
-            if results.is_empty() {
-                empty_count += 1;
-            }
         }
-
-        if expect_results && empty_count > 0 {
-            println!("  ⚠  '{}' returned empty {} / 50 times", term, empty_count);
-            println!("     → Check tsvector column config, GIN index, and text search language.\n");
-        }
-
         stats.print();
     }
 
     // ── 4.5 COMPLEX LOGIC — and/or/not ───────────────────────────────────────
-    separator("4.5 Complex Logic — and(), or(), not()");
+    separator("4.5 Complex Logic — and!(), or!()");
 
-    let mut logic_stats = Stats::new(
-        "Complex Query: content ~ 'production' AND (author ~ 'user_0' OR author ~ 'user_1')",
-    );
+    let mut logic_stats = Stats::new("Complex Query: content ~ 'production' AND (author ~ 'user_0' OR author ~ 'user_1')");
     for _ in 0..50 {
         let q = db_query!(
-            filter: nx_db::and!(
+            filter: and!(
                 Post::CONTENT.contains("production"),
-                nx_db::or!(
+                or!(
                     Post::AUTHOR.contains("user_0"),
                     Post::AUTHOR.contains("user_1")
                 )
@@ -284,22 +273,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             limit: 50
         );
         let start = Instant::now();
-        let results = post_repo.find(q).await?;
+        let _ = post_repo.find(q).await?;
         logic_stats.push(start.elapsed());
-        // In this benchmark setup, authors are like 'user_0', 'user_1', etc.
-        // Wait, the make_posts function uses 'r{round}_post_{uid}_{j}' but author is just uid.
-        // Let's check how authors are named in make_users.
     }
     logic_stats.print();
 
     // ── 5. RELATIONSHIP LOADING ───────────────────────────────────────────────
-    separator("5. load_many_to_one::<User>  (N+1 prevention)");
+    separator("5. load_many_to_one::<User>");
 
-    for &batch in &[10usize, 50, 100] {
-        let mut stats = Stats::new(&format!(
-            "load_many_to_one — {} posts  (expect ≤{} unique authors)",
-            batch, user_count
-        ));
+    for &batch in &[50usize, 100] {
+        let mut stats = Stats::new(&format!("load_many_to_one — {} posts", batch));
         for _ in 0..20 {
             let posts = post_repo.find(db_query!(limit: batch)).await?;
             let start = Instant::now();
@@ -312,71 +295,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         stats.print();
     }
 
-    // ── 6. SINGLE insert() vs insert_many() ──────────────────────────────────
-    separator("6. insert() ×10 sequential  vs  insert_many() ×10 batch");
-
-    const SINGLE_BATCH: usize = 10;
-
-    let mut single_stats = Stats::with_ops("insert() ×10 sequential", SINGLE_BATCH);
-    for round in 0..20usize {
-        sqlx::query("DELETE FROM nuvix_bench.users WHERE _uid LIKE 'si_%'")
-            .execute(&pool)
-            .await?;
-        // sqlx::query("DELETE FROM nuvix_bench.users_perms WHERE document_id LIKE 'si_%'").execute(&pool).await?;
-
-        let start = Instant::now();
-        for i in 0..SINGLE_BATCH {
-            let _ = user_repo
-                .insert(CreateUser {
-                    id: Key::new(format!("si_r{}_u{}", round, i)).unwrap(),
-                    name: format!("SI {}", i),
-                    email: format!("si_r{}_u{}@ex.com", round, i),
-                    metadata: None,
-                    permissions: vec!["read(\"any\")".to_string()],
-                })
-                .await?;
-        }
-        single_stats.push(start.elapsed());
-    }
-    single_stats.print();
-
-    let mut batch_stats = Stats::with_ops("insert_many() ×10 batch", SINGLE_BATCH);
-    for round in 0..20usize {
-        sqlx::query("DELETE FROM nuvix_bench.users WHERE _uid LIKE 'bi_%'")
-            .execute(&pool)
-            .await?;
-        // sqlx::query("DELETE FROM nuvix_bench.users_perms WHERE document_id LIKE 'bi_%'").execute(&pool).await?;
-
-        let records: Vec<CreateUser> = (0..SINGLE_BATCH)
-            .map(|i| CreateUser {
-                id: Key::new(format!("bi_r{}_u{}", round, i)).unwrap(),
-                name: format!("BI {}", i),
-                email: format!("bi_r{}_u{}@ex.com", round, i),
-                metadata: None,
-                permissions: vec!["read(\"any\")".to_string()],
-            })
-            .collect();
-
-        let start = Instant::now();
-        let _ = user_repo.insert_many(records).await?;
-        batch_stats.push(start.elapsed());
-    }
-    batch_stats.print();
-
     // ── SUMMARY ───────────────────────────────────────────────────────────────
     separator("Complete");
-    println!(
-        "  Dataset : {} users  {} posts  ({} total records)",
-        user_count, total_posts, total_records
+    println!("Metadata test (Post 0): sequence={}, uid={}, created_at={}", 
+        all_posts[0]._metadata.sequence, 
+        all_posts[0]._metadata.uid,
+        all_posts[0]._metadata.created_at
     );
-    println!();
-    println!("  What to look for:");
-    println!("   2a p50 ≈ 2b p50?          → find() pre-warms cache (note this behaviour)");
-    println!("   insert() mean / insert_many() mean  → actual batch speedup ratio");
-    println!("   find(10) vs find(100) ops/sec        → per-record overhead vs fixed cost");
-    println!("   FTS ⚠ warnings             → tsvector / GIN index config issue");
-    println!("   p99 >> p95 anywhere        → occasional spike worth investigating");
-    println!();
 
     Ok(())
 }

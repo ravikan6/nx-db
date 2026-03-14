@@ -4,8 +4,18 @@ use crate::schema::CollectionSchema;
 use crate::traits::storage::StorageRecord;
 use std::future::Future;
 use std::pin::Pin;
+use time::OffsetDateTime;
 
 pub type ModelFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Metadata {
+    pub sequence: i64,
+    pub uid: String,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
+    pub permissions: Vec<String>,
+}
 
 pub trait Model: Copy + Send + Sync + 'static {
     type Id: AsRef<str> + Clone + Send + Sync + 'static;
@@ -20,6 +30,7 @@ pub trait Model: Copy + Send + Sync + 'static {
     }
 
     fn entity_to_id(entity: &Self::Entity) -> &Self::Id;
+    fn entity_metadata(entity: &Self::Entity) -> &Metadata;
 
     fn create_to_record(
         input: Self::Create,
