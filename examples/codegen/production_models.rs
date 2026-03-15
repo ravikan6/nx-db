@@ -94,7 +94,7 @@ pub mod prod_models {
         pub const EMAIL: Field<User, String> = Field::new("email");
         pub const METADATA: Field<User, Option<String>> = Field::new("metadata");
     }
-    nx_db::impl_model! { name: User, id: UserId, entity: UserEntity, create: CreateUser, update: UpdateUser, schema: USERS_SCHEMA, fields: {                 "name" => name : String,                 "email" => email : String,                 "metadata" => metadata : Option<String> } }
+    nx_db::impl_model! { name: User, id: UserId, entity: UserEntity, create: CreateUser, update: UpdateUser, schema: USERS_SCHEMA, fields: {                 "name" => name : String :required,                 "email" => email : String :required,                 "metadata" => metadata : Option<String> } }
     pub type PostId = Key<32>;
 
     #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
@@ -189,7 +189,7 @@ pub mod prod_models {
         pub const CONTENT: Field<Post, Option<String>> = Field::new("content");
         pub const AUTHOR: Field<Post, String> = Field::new("author");
     }
-    nx_db::impl_model! { name: Post, id: PostId, entity: PostEntity, create: CreatePost, update: UpdatePost, schema: POSTS_SCHEMA, fields: {                 "title" => title : String,                 "content" => content : Option<String>,                 "author" => author : String } }
+    nx_db::impl_model! { name: Post, id: PostId, entity: PostEntity, create: CreatePost, update: UpdatePost, schema: POSTS_SCHEMA, fields: {                 "title" => title : String :required,                 "content" => content : Option<String>,                 "author" => author : String :required } }
     pub fn registry() -> Result<StaticRegistry, DatabaseError> {
         let registry = StaticRegistry::new()
             .register(&USERS_SCHEMA)?

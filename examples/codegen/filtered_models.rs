@@ -86,7 +86,7 @@ pub mod filtered_app_models {
         pub const NAME: EncodedField<User, crate::DisplayName> = EncodedField::new("name", encode_query_user_name);
         pub const ACTIVE: Field<User, bool> = Field::new("active");
     }
-    nx_db::impl_model! { name: User, id: UserId, entity: UserEntity, create: CreateUser, update: UpdateUser, schema: USERS_SCHEMA, fields: {                 "name" => name : String [encode_user_name, decode_user_name],                 "active" => active : bool } }
+    nx_db::impl_model! { name: User, id: UserId, entity: UserEntity, create: CreateUser, update: UpdateUser, schema: USERS_SCHEMA, fields: {                 "name" => name : String [encode_user_name, decode_user_name] :required,                 "active" => active : bool :required } }
     pub fn registry() -> Result<StaticRegistry, DatabaseError> {
         let registry = StaticRegistry::new()
             .register(&USERS_SCHEMA)?

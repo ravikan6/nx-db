@@ -127,7 +127,7 @@ macro_rules! impl_model {
         update: $update_name:ident,
         schema: $schema_const:ident,
         fields: {
-            $($field_id:expr => $field_name:ident : $field_type:ty $([ $encoder:ident, $decoder:ident ])?),*
+            $($field_id:expr => $field_name:ident : $field_type:ty $([ $encoder:ident, $decoder:ident ])? $(:$required:ident)?),*
         }
         $(, virtuals: { $($virtual_field:ident),* })?
         $(, resolvers: { $($resolver_field:ident : $resolver_fn:path),* })?
@@ -191,7 +191,7 @@ macro_rules! impl_model {
                     },
                     id: $crate::get_required(&record, $crate::FIELD_ID)?,
                     $(
-                        $field_name: $crate::impl_model!(@get_field record, $field_id, $field_type $(, $decoder)?),
+                        $field_name: $crate::impl_model!(@get_field record, $field_id, $field_type $(, $decoder)? $(:$required)?),
                     )*
                     $($(
                         $virtual_field: None,
@@ -222,10 +222,16 @@ macro_rules! impl_model {
     };
 
     // Helper for entity_from_record
-    (@get_field $record:ident, $id:expr, $type:ty) => {
-        $crate::get_optional::<$type>(&$record, $id)?.unwrap_or_default()
+    (@get_field $record:ident, $id:expr, $type:ty, $decoder:ident :required) => {
+        $decoder($crate::get_required(&$record, $id)?)?
     };
     (@get_field $record:ident, $id:expr, $type:ty, $decoder:ident) => {
-        $crate::get_optional::<$type>(&$record, $id)?.map(|v| $decoder(v)).transpose()?.unwrap_or_default()
+        $decoder($crate::get_optional(&$record, $id)?)?
+    };
+    (@get_field $record:ident, $id:expr, $type:ty :required) => {
+        $crate::get_required::<$type>(&$record, $id)?
+    };
+    (@get_field $record:ident, $id:expr, $type:ty) => {
+        $crate::get_optional::<$type>(&$record, $id)?.unwrap_or_default()
     };
 }

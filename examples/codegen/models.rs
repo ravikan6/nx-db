@@ -100,7 +100,7 @@ pub mod app_models {
         pub const EMAIL: Field<User, Option<String>> = Field::new("email");
         pub const ACTIVE: Field<User, bool> = Field::new("active");
     }
-    nx_db::impl_model! { name: User, id: UserId, entity: UserEntity, create: CreateUser, update: UpdateUser, schema: USERS_SCHEMA, fields: {                 "name" => name : String,                 "email" => email : Option<String>,                 "active" => active : bool } }
+    nx_db::impl_model! { name: User, id: UserId, entity: UserEntity, create: CreateUser, update: UpdateUser, schema: USERS_SCHEMA, fields: {                 "name" => name : String :required,                 "email" => email : Option<String>,                 "active" => active : bool :required } }
     pub type SessionId = Key<48>;
 
     #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
@@ -188,7 +188,7 @@ pub mod app_models {
         pub const TOKEN: Field<Session, String> = Field::new("token");
         pub const REVOKED: Field<Session, bool> = Field::new("revoked");
     }
-    nx_db::impl_model! { name: Session, id: SessionId, entity: SessionEntity, create: CreateSession, update: UpdateSession, schema: SESSIONS_SCHEMA, fields: {                 "userId" => user_id : String,                 "token" => token : String,                 "revoked" => revoked : bool } }
+    nx_db::impl_model! { name: Session, id: SessionId, entity: SessionEntity, create: CreateSession, update: UpdateSession, schema: SESSIONS_SCHEMA, fields: {                 "userId" => user_id : String :required,                 "token" => token : String :required,                 "revoked" => revoked : bool :required } }
     pub fn registry() -> Result<StaticRegistry, DatabaseError> {
         let registry = StaticRegistry::new()
             .register(&USERS_SCHEMA)?

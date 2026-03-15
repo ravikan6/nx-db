@@ -84,7 +84,7 @@ pub mod virtual_app_models {
         pub const NAME: Field<User, String> = Field::new("name");
         pub const ACTIVE: Field<User, bool> = Field::new("active");
     }
-    nx_db::impl_model! { name: User, id: UserId, entity: UserEntity, create: CreateUser, update: UpdateUser, schema: USERS_SCHEMA, fields: {                 "name" => name : String,                 "active" => active : bool }, virtuals: { profile_label }, resolvers: { profile_label : crate::resolvers::resolve_profile_label } }
+    nx_db::impl_model! { name: User, id: UserId, entity: UserEntity, create: CreateUser, update: UpdateUser, schema: USERS_SCHEMA, fields: {                 "name" => name : String :required,                 "active" => active : bool :required }, virtuals: { profile_label }, resolvers: { profile_label : crate::resolvers::resolve_profile_label } }
     pub fn registry() -> Result<StaticRegistry, DatabaseError> {
         let registry = StaticRegistry::new()
             .register(&USERS_SCHEMA)?

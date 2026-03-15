@@ -643,10 +643,21 @@ fn emit_collection(
             helpers.public_type, helpers.storage_type
         )
         .unwrap();
-        for filter in &helpers.chain {
-            writeln!(out, "        let value = {}(value)?;", filter.encode).unwrap();
+        if attribute.required {
+            for filter in &helpers.chain {
+                writeln!(out, "        let value = {}(value)?;", filter.encode).unwrap();
+            }
+            writeln!(out, "        Ok(value)").unwrap();
+        } else {
+            writeln!(out, "        if let Some(value) = value {{").unwrap();
+            for filter in &helpers.chain {
+                writeln!(out, "            let value = {}(value)?;", filter.encode).unwrap();
+            }
+            writeln!(out, "            Ok(Some(value))").unwrap();
+            writeln!(out, "        }} else {{").unwrap();
+            writeln!(out, "            Ok(None)").unwrap();
+            writeln!(out, "        }}").unwrap();
         }
-        writeln!(out, "        Ok(value)").unwrap();
         writeln!(out, "    }}").unwrap();
         writeln!(out).unwrap();
 
@@ -656,11 +667,19 @@ fn emit_collection(
             helpers.public_type
         )
         .unwrap();
-        writeln!(
-            out,
-            "        Ok(nx_db::IntoStorage::into_storage({encode_fn}(value)?))"
-        )
-        .unwrap();
+        if attribute.required {
+            writeln!(
+                out,
+                "        Ok(nx_db::IntoStorage::into_storage({encode_fn}(value)?))"
+            )
+            .unwrap();
+        } else {
+            writeln!(out, "        if let Some(value) = value {{").unwrap();
+            writeln!(out, "            Ok(nx_db::IntoStorage::into_storage({}(value)?))", helpers.chain.last().unwrap().encode).unwrap();
+            writeln!(out, "        }} else {{").unwrap();
+            writeln!(out, "            Ok(nx_db::traits::storage::StorageValue::Null)").unwrap();
+            writeln!(out, "        }}").unwrap();
+        }
         writeln!(out, "    }}").unwrap();
         writeln!(out).unwrap();
 
@@ -670,10 +689,21 @@ fn emit_collection(
             helpers.storage_type, helpers.public_type
         )
         .unwrap();
-        for filter in helpers.chain.iter().rev() {
-            writeln!(out, "        let value = {}(value)?;", filter.decode).unwrap();
+        if attribute.required {
+            for filter in helpers.chain.iter().rev() {
+                writeln!(out, "        let value = {}(value)?;", filter.decode).unwrap();
+            }
+            writeln!(out, "        Ok(value)").unwrap();
+        } else {
+            writeln!(out, "        if let Some(value) = value {{").unwrap();
+            for filter in helpers.chain.iter().rev() {
+                writeln!(out, "            let value = {}(value)?;", filter.decode).unwrap();
+            }
+            writeln!(out, "            Ok(Some(value))").unwrap();
+            writeln!(out, "        }} else {{").unwrap();
+            writeln!(out, "            Ok(None)").unwrap();
+            writeln!(out, "        }}").unwrap();
         }
-        writeln!(out, "        Ok(value)").unwrap();
         writeln!(out, "    }}").unwrap();
         writeln!(out).unwrap();
     }
@@ -837,11 +867,12 @@ fn emit_collection(
         let field_id = &attribute.id;
         let field_name = rust_field_name(&attribute.id);
         let storage_type = query_field_type(attribute);
+        let required_flag = if attribute.required { " :required" } else { "" };
         if let Some(decoder) = attribute.filters.first().map(|_| decode_helper_name(&model_name, &attribute.id)) {
              let encoder = encode_helper_name(&model_name, &attribute.id);
-             attribute_lines.push(format!("                \"{}\" => {} : {} [{}, {}]", field_id, field_name, storage_type, encoder, decoder));
+             attribute_lines.push(format!("                \"{}\" => {} : {} [{}, {}]{}", field_id, field_name, storage_type, encoder, decoder, required_flag));
         } else {
-             attribute_lines.push(format!("                \"{}\" => {} : {}", field_id, field_name, storage_type));
+             attribute_lines.push(format!("                \"{}\" => {} : {}{}", field_id, field_name, storage_type, required_flag));
         }
     }
 
@@ -1067,11 +1098,16 @@ fn attribute_filter_helpers<'a>(
     attribute: &AttributeSpec,
 ) -> Result<AttributeFilterHelpers<'a>, CodegenError> {
     let chain = resolve_attribute_filters(filters_by_name, collection, attribute)?;
-    let public_type = chain
+    let mut public_type = chain
         .first()
         .map(|filter| filter.decoded_type.clone())
         .unwrap_or_else(|| storage_field_base_type(attribute.kind, attribute.array));
-    let storage_type = storage_field_base_type(attribute.kind, attribute.array);
+    let mut storage_type = storage_field_base_type(attribute.kind, attribute.array);
+
+    if !attribute.required {
+        public_type = format!("Option<{}>", public_type);
+        storage_type = format!("Option<{}>", storage_type);
+    }
 
     Ok(AttributeFilterHelpers {
         public_type,
