@@ -8,10 +8,10 @@ description = "CLI for nx-db schema/codegen and database workflows."
 readme = "../README.md"
 
 [dependencies]
-nx-db = { path = "..", version = "0.1.0", features = ["postgres"] }
+nx-db = { path = "..", version = "0.1.0", features = ["postgres", "sqlite"] }
 database-codegen = { path = "../database-codegen", version = "0.1.0" }
 clap = { version = "4.5.31", features = ["derive"] }
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
-sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio-rustls"] }
+sqlx = { version = "0.8.6", features = ["postgres", "sqlite", "runtime-tokio-rustls"] }
 serde_json = "1.0.149"
 dotenvy = "0.15.7"

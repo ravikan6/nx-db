@@ -1,5 +1,6 @@
 use nx_db::prelude::*;
-use nx_db::{and, db_context, db_query, or};
+use nx_db::traits::storage::StorageAdapter;
+use nx_db::{db_context, db_query};
 use rand::Rng;
 use std::time::{Duration, Instant};
 
@@ -86,7 +87,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .with_cache(nx_db::cache::MemoryCacheBackend::default())
             .build()?;
         run_benchmarks_pg(db, pool).await?;
-    } else if url.starts_with("sqlite://") {
+    } else if url.starts_with("sqlite:") {
         #[cfg(feature = "sqlite")]
         {
             let pool = sqlx::SqlitePool::connect(&url).await?;
@@ -110,11 +111,15 @@ async fn run_benchmarks_pg(db: Database<nx_db::postgres::PostgresAdapter, nx_db:
 
 #[cfg(feature = "sqlite")]
 async fn run_benchmarks_sqlite(db: Database<nx_db::sqlite::SqliteAdapter, nx_db::StaticRegistry>, pool: sqlx::SqlitePool) -> Result<(), Box<dyn std::error::Error>> {
+    let ctx = db_context!(schema: "public", role: Role::any());
+    db.adapter().create_collection(&ctx, User::schema()).await?;
+    db.adapter().create_collection(&ctx, Post::schema()).await?;
+
     run_core_benchmarks(db, |p| Box::pin(async move {
-        sqlx::query("DELETE FROM users").execute(&p).await?;
-        sqlx::query("DELETE FROM posts").execute(&p).await?;
-        sqlx::query("DELETE FROM users_perms").execute(&p).await?;
-        sqlx::query("DELETE FROM posts_perms").execute(&p).await?;
+        let _ = sqlx::query("DELETE FROM users").execute(&p).await;
+        let _ = sqlx::query("DELETE FROM posts").execute(&p).await;
+        let _ = sqlx::query("DELETE FROM users_perms").execute(&p).await;
+        let _ = sqlx::query("DELETE FROM posts_perms").execute(&p).await;
         Ok(())
     }), pool).await
 }

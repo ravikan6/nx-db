@@ -31,6 +31,26 @@ impl SqliteQuery {
         }
     }
 
+    pub fn push_bind_value_separated(sep: &mut sqlx::query_builder::Separated<'_, '_, Sqlite, &str>, value: &StorageValue) {
+        match value {
+            StorageValue::Null => { sep.push_bind(Option::<String>::None); }
+            StorageValue::Bool(v) => { sep.push_bind(if *v { 1i64 } else { 0i64 }); }
+            StorageValue::Int(v) => { sep.push_bind(*v); }
+            StorageValue::Float(v) => { sep.push_bind(*v); }
+            StorageValue::String(v) | StorageValue::Json(v) => { sep.push_bind(v.clone()); }
+            StorageValue::Timestamp(v) => { sep.push_bind(v.format(&time::format_description::well_known::Rfc3339).unwrap()); }
+            StorageValue::BoolArray(v) => { sep.push_bind(serde_json::to_string(v).unwrap()); }
+            StorageValue::IntArray(v) => { sep.push_bind(serde_json::to_string(v).unwrap()); }
+            StorageValue::FloatArray(v) => { sep.push_bind(serde_json::to_string(v).unwrap()); }
+            StorageValue::StringArray(v) => { sep.push_bind(serde_json::to_string(v).unwrap()); }
+            StorageValue::TimestampArray(v) => {
+                let strings: Vec<String> = v.iter().map(|dt| dt.format(&time::format_description::well_known::Rfc3339).unwrap()).collect();
+                sep.push_bind(serde_json::to_string(&strings).unwrap());
+            }
+            StorageValue::Bytes(v) => { sep.push_bind(v.clone()); }
+        }
+    }
+
     pub fn push_filter(builder: &mut QueryBuilder<'_, Sqlite>, schema: &'static CollectionSchema, filter: &Filter) -> Result<(), DatabaseError> {
         match filter {
             Filter::Field { field, op } => {

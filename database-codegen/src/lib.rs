@@ -420,7 +420,7 @@ pub fn generate(spec: &ProjectSpec) -> Result<String, CodegenError> {
     validate_project_spec(spec)?;
 
     let mut out = String::new();
-    let needs_take_optional = spec
+    let _needs_take_optional = spec
         .collections
         .iter()
         .flat_map(|collection| collection.attributes.iter())

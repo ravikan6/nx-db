@@ -95,7 +95,7 @@ impl StorageAdapter for PostgresAdapter {
     }
 
     fn insert(&self, context: &Context, schema: &'static CollectionSchema, values: StorageRecord) -> AdapterFuture<'_, Result<StorageRecord, DatabaseError>> {
-        let pool = self.pool.clone();
+        let _pool = self.pool.clone();
         let context = context.clone();
         Box::pin(async move {
             let results = self.insert_many(&context, schema, vec![values]).await?;

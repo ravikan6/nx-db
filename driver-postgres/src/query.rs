@@ -1,7 +1,7 @@
 use database_core::errors::DatabaseError;
 use database_core::query::{Filter, FilterOp, QuerySpec, SortDirection};
 use database_core::{
-    CollectionSchema, Context, Order,
+    CollectionSchema, Context,
 };
 use sqlx::{Postgres, QueryBuilder};
 use crate::utils::PostgresUtils;

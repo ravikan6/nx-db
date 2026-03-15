@@ -15,12 +15,6 @@ pub struct SqliteAdapter {
 
 impl SqliteAdapter {
     pub fn new(pool: Pool<Sqlite>) -> Self {
-        // Sqlite busy timeout handling
-        let _pool_clone = pool.clone(); 
-        tokio::spawn(async move { 
-            let _ = sqlx::query("PRAGMA busy_timeout = 5000").execute(&_pool_clone).await; 
-        });
-        
         Self { pool }
     }
 
@@ -69,7 +63,7 @@ impl StorageAdapter for SqliteAdapter {
             ];
             for attr in schema.persisted_attributes() {
                 let st = SqliteUtils::sql_type(attr.kind, attr.array);
-                cols.push(format!("{} {} {}", SqliteUtils::quote_identifier(attr.column), st, if attr.required { "NOT NULL" } else { "DEFAULT NULL" }));
+                cols.push(format!("{} {} {}", SqliteUtils::quote_identifier(attr.column), st, if attr.required { " NOT NULL" } else { "DEFAULT NULL" }));
             }
             let sql = format!("CREATE TABLE IF NOT EXISTS {table} ({})", cols.join(", "));
             sqlx::query(&sql).execute(&pool).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
@@ -78,7 +72,7 @@ impl StorageAdapter for SqliteAdapter {
     }
 
     fn insert(&self, context: &Context, schema: &'static CollectionSchema, values: StorageRecord) -> AdapterFuture<'_, Result<StorageRecord, DatabaseError>> {
-        let pool = self.pool.clone();
+        let _pool = self.pool.clone();
         let context = context.clone();
         Box::pin(async move {
             let results = self.insert_many(&context, schema, vec![values]).await?;
@@ -98,19 +92,26 @@ impl StorageAdapter for SqliteAdapter {
 
             for mut record in values {
                 let mut builder = QueryBuilder::<Sqlite>::new(format!("INSERT INTO {table} ("));
-                builder.push(format!("{COLUMN_ID}, {}, {}, {}", database_core::COLUMN_CREATED_AT, database_core::COLUMN_UPDATED_AT, database_core::COLUMN_PERMISSIONS));
-                for a in &attrs { builder.push(", "); builder.push(SqliteUtils::quote_identifier(a.column)); }
+                builder.push(format!("{}, {}, {}, {}", COLUMN_ID, database_core::COLUMN_CREATED_AT, database_core::COLUMN_UPDATED_AT, database_core::COLUMN_PERMISSIONS));
+                for a in &attrs { 
+                    builder.push(", "); 
+                    builder.push(SqliteUtils::quote_identifier(a.column)); 
+                }
                 builder.push(") VALUES (");
                 
-                builder.push_bind(record.get(FIELD_ID).unwrap().as_str().unwrap().to_string());
-                builder.push_bind(record.get(FIELD_CREATED_AT).unwrap().as_timestamp().unwrap().format(&time::format_description::well_known::Rfc3339).unwrap());
-                builder.push_bind(record.get(FIELD_UPDATED_AT).unwrap().as_timestamp().unwrap().format(&time::format_description::well_known::Rfc3339).unwrap());
-                builder.push_bind(serde_json::to_string(record.get(FIELD_PERMISSIONS).unwrap().as_string_array().unwrap()).unwrap());
+                {
+                    let mut sep = builder.separated(", ");
+                    sep.push_bind(record.get(FIELD_ID).unwrap().as_str().unwrap().to_string());
+                    sep.push_bind(record.get(FIELD_CREATED_AT).unwrap().as_timestamp().unwrap().format(&time::format_description::well_known::Rfc3339).unwrap());
+                    sep.push_bind(record.get(FIELD_UPDATED_AT).unwrap().as_timestamp().unwrap().format(&time::format_description::well_known::Rfc3339).unwrap());
+                    sep.push_bind(serde_json::to_string(record.get(FIELD_PERMISSIONS).unwrap().as_string_array().unwrap()).unwrap());
 
-                for a in &attrs {
-                    builder.push(", ");
-                    SqliteQuery::push_bind_value(&mut builder, record.get(a.id).unwrap_or(&StorageValue::Null));
+                    for a in &attrs {
+                        let val = record.get(a.id).unwrap_or(&StorageValue::Null);
+                        SqliteQuery::push_bind_value_separated(&mut sep, val);
+                    }
                 }
+                
                 builder.push(") RETURNING ");
                 builder.push(COLUMN_SEQUENCE);
 
@@ -213,5 +214,4 @@ impl StorageAdapter for SqliteAdapter {
             Ok(count as u64)
         })
     }
-
 }
