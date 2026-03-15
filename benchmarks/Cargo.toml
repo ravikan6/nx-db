@@ -4,6 +4,10 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+[features]
+default = []
+sqlite = ["nx-db/sqlite"]
+
 [dependencies]
 nx-db = { path = "..", features = ["postgres"] }
 tokio = { version = "1.48.0", features = ["full"] }

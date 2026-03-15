@@ -14,3 +14,9 @@ bytes = "1.10.1"
 bincode = { version = "2.0.1", features = ["serde"] }
 thiserror = "2.0.12"
 database-cache = { path = "../database-cache", version = "0.1.0" }
+sqlx = { version = "0.8.6", optional = true }
+
+[features]
+default = []
+postgres = ["dep:sqlx"]
+sqlite = ["dep:sqlx"]

@@ -402,6 +402,7 @@ dependencies = [
  "bytes",
  "database-cache",
  "serde",
+ "sqlx",
  "thiserror",
  "time",
 ]

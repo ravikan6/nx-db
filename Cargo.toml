@@ -41,6 +41,6 @@ tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread"] }
 
 [features]
 default = []
-postgres = ["driver-postgres", "dep:sqlx", "sqlx/postgres"]
-sqlite = ["driver-sqlite", "dep:sqlx", "sqlx/sqlite"]
+postgres = ["driver-postgres", "dep:sqlx", "sqlx/postgres", "database-core/postgres"]
+sqlite = ["driver-sqlite", "dep:sqlx", "sqlx/sqlite", "database-core/sqlite"]
 cache-redis = ["database-cache/redis"]

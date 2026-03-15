@@ -27,6 +27,29 @@ pub enum StorageValue {
     Json(String),
 }
 
+impl StorageValue {
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            Self::String(v) | Self::Json(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    pub fn as_timestamp(&self) -> Option<OffsetDateTime> {
+        match self {
+            Self::Timestamp(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    pub fn as_string_array(&self) -> Option<&[String]> {
+        match self {
+            Self::StringArray(v) => Some(v),
+            _ => None,
+        }
+    }
+}
+
 pub type StorageRecord = BTreeMap<String, StorageValue>;
 
 pub trait StorageAdapter: Send + Sync {
@@ -106,6 +129,4 @@ pub trait StorageAdapter: Send + Sync {
         schema: &'static CollectionSchema,
         query: &QuerySpec,
     ) -> AdapterFuture<'_, Result<u64, DatabaseError>>;
-
-    fn pool_any(&self) -> &sqlx::AnyPool;
 }
