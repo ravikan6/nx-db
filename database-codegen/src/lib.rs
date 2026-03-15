@@ -824,35 +824,35 @@ fn emit_collection(
     writeln!(out, "    }}").unwrap();
 
     let mut attribute_lines = Vec::new();
+    let mut virtual_lines = Vec::new();
+    let mut resolver_lines = Vec::new();
     for attribute in &collection.attributes {
-        if attribute.kind == AttributeKindSpec::Virtual { continue; }
+        if attribute.kind == AttributeKindSpec::Virtual { 
+            let field = rust_field_name(&attribute.id);
+            virtual_lines.push(field.clone());
+            let resolver = resolve_attribute_resolver(&resolvers_by_name, collection, attribute)?;
+            resolver_lines.push(format!("{} : {}", field, resolver.resolve));
+            continue; 
+        }
         let field_id = &attribute.id;
         let field_name = rust_field_name(&attribute.id);
         let storage_type = query_field_type(attribute);
         if let Some(decoder) = attribute.filters.first().map(|_| decode_helper_name(&model_name, &attribute.id)) {
-             attribute_lines.push(format!("                \"{}\" => {} : {} [{}]", field_id, field_name, storage_type, decoder));
+             let encoder = encode_helper_name(&model_name, &attribute.id);
+             attribute_lines.push(format!("                \"{}\" => {} : {} [{}, {}]", field_id, field_name, storage_type, encoder, decoder));
         } else {
              attribute_lines.push(format!("                \"{}\" => {} : {}", field_id, field_name, storage_type));
         }
     }
 
-    writeln!(out, "    nx_db::impl_model! {{ name: {}, id: {}, entity: {}, create: {}, update: {}, schema: {}, fields: {{ {} }} }}",
-        model_name, id_name, entity_name, create_name, update_name, schema_const, attribute_lines.join(", ")
-    ).unwrap();
-
-    if collection.attributes.iter().any(|a| a.kind == AttributeKindSpec::Virtual) {
-        writeln!(out, "    impl {model_name} {{").unwrap();
-        writeln!(out, "        pub async fn resolve_entity<'a>(mut entity: {entity_name}, context: &'a Context) -> ModelFuture<'a, Result<{entity_name}, DatabaseError>> {{").unwrap();
-        writeln!(out, "            Box::pin(async move {{").unwrap();
-        for attribute in &collection.attributes {
-            if attribute.kind != AttributeKindSpec::Virtual { continue; }
-            let field = rust_field_name(&attribute.id);
-            let resolver = resolve_attribute_resolver(&resolvers_by_name, collection, attribute)?;
-            writeln!(out, "                entity.{field} = Some({}(&entity, context).await?);", resolver.resolve).unwrap();
-        }
-        writeln!(out, "                Ok(entity) }})").unwrap();
-        writeln!(out, "        }}").unwrap();
-        writeln!(out, "    }}").unwrap();
+    if virtual_lines.is_empty() {
+        writeln!(out, "    nx_db::impl_model! {{ name: {}, id: {}, entity: {}, create: {}, update: {}, schema: {}, fields: {{ {} }} }}",
+            model_name, id_name, entity_name, create_name, update_name, schema_const, attribute_lines.join(", ")
+        ).unwrap();
+    } else {
+        writeln!(out, "    nx_db::impl_model! {{ name: {}, id: {}, entity: {}, create: {}, update: {}, schema: {}, fields: {{ {} }}, virtuals: {{ {} }}, resolvers: {{ {} }} }}",
+            model_name, id_name, entity_name, create_name, update_name, schema_const, attribute_lines.join(", "), virtual_lines.join(", "), resolver_lines.join(", ")
+        ).unwrap();
     }
 
     Ok(())
@@ -1315,8 +1315,8 @@ mod tests {
         assert!(output.contains("id: \"users_name_idx\""));
         assert!(output.contains("kind: nx_db::IndexKind::Key"));
         assert!(output.contains("orders: &[nx_db::Order::Asc]"));
-        assert!(output.contains("fn resolve_entity<'a>(mut entity: Self::Entity, context: &'a Context) -> ModelFuture<'a, Result<Self::Entity, DatabaseError>>"));
-        assert!(output.contains("entity.profile_label = Some(crate::resolvers::resolve_profile_label(&entity, context).await?);"));
+        assert!(output.contains("virtuals: { profile_label }"));
+        assert!(output.contains("resolvers: { profile_label : crate::resolvers::resolve_profile_label }"));
         assert!(output.contains("pub fn registry() -> Result<StaticRegistry, DatabaseError>"));
     }
 }

@@ -169,28 +169,103 @@ impl StorageAdapter for PostgresAdapter {
         let id = id.to_string();
         Box::pin(async move {
             let table = PostgresUtils::qualified_table_name(&context, schema.id)?;
-            let attributes: Vec<_> = schema.persisted_attributes().filter(|a| values.contains_key(a.id)).collect();
+            let mut tx = pool.begin().await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+            
             let mut builder = QueryBuilder::<Postgres>::new(format!("UPDATE {table} AS main SET "));
             let mut first = true;
+            
+            let attributes: Vec<_> = schema.persisted_attributes().filter(|a| values.contains_key(a.id)).collect();
             for a in &attributes {
                 if !first { builder.push(", "); }
                 first = false;
                 builder.push(format!("{} = ", PostgresUtils::quote_identifier(a.column)?));
                 PostgresQuery::push_bind_value(&mut builder, values.get(a.id).unwrap());
             }
+
+            if let Some(val) = values.get(database_core::FIELD_UPDATED_AT) {
+                if !first { builder.push(", "); }
+                first = false;
+                builder.push(format!("{} = ", PostgresUtils::quote_identifier(database_core::COLUMN_UPDATED_AT)?));
+                PostgresQuery::push_bind_value(&mut builder, val);
+            }
+
+            let permissions = PostgresUtils::extract_optional_string_array(&values, database_core::FIELD_PERMISSIONS).unwrap_or_default();
+            let has_perms = values.contains_key(database_core::FIELD_PERMISSIONS);
+            if has_perms {
+                if !first { builder.push(", "); }
+                builder.push(format!("{} = ", PostgresUtils::quote_identifier(database_core::COLUMN_PERMISSIONS)?));
+                builder.push_bind(permissions.clone());
+            }
+
             let mut has_where = false;
             PostgresQuery::push_condition_separator(&mut builder, &mut has_where);
             builder.push(format!("main.{} = ", PostgresUtils::quote_identifier(database_core::COLUMN_ID)?));
             builder.push_bind(&id);
             PostgresQuery::push_document_action_condition(&mut builder, &context, schema, "main", PermissionEnum::Update, &mut has_where)?;
             builder.push(format!(" RETURNING {}", PostgresUtils::select_columns(schema)?));
-            let row = builder.build().fetch_optional(&pool).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
-            row.map(|r| PostgresUtils::row_to_record_internal(&r, schema)).transpose()
+            
+            let row = builder.build().fetch_optional(&mut *tx).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let record = match row {
+                Some(r) => PostgresUtils::row_to_record_internal(&r, schema)?,
+                None => return Ok(None),
+            };
+
+            if has_perms {
+                let seq = record.get(database_core::FIELD_SEQUENCE).unwrap().as_int().unwrap();
+                let perms_table = PostgresUtils::qualified_permissions_table_name(&context, schema.id)?;
+                sqlx::query(&format!("DELETE FROM {perms_table} WHERE document_id = $1"))
+                    .bind(seq)
+                    .execute(&mut *tx).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+                
+                let grouped_perms = database_core::utils::permission_rows(&permissions)?;
+                for (pt, pv) in grouped_perms {
+                    sqlx::query(&format!("INSERT INTO {perms_table} (document_id, permission_type, permissions) VALUES ($1, $2, $3)"))
+                        .bind(seq)
+                        .bind(pt)
+                        .bind(pv)
+                        .execute(&mut *tx).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+                }
+            }
+
+            tx.commit().await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+            Ok(Some(record))
         })
     }
 
-    fn update_many(&self, _context: &Context, _schema: &'static CollectionSchema, _query: &QuerySpec, _values: StorageRecord) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
-        Box::pin(async move { Err(DatabaseError::Other("update_many not implemented yet".into())) })
+    fn update_many(&self, context: &Context, schema: &'static CollectionSchema, query: &QuerySpec, values: StorageRecord) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
+        let pool = self.pool.clone();
+        let context = context.clone();
+        let query = query.clone();
+        Box::pin(async move {
+            let table = PostgresUtils::qualified_table_name(&context, schema.id)?;
+            let mut builder = QueryBuilder::<Postgres>::new(format!("UPDATE {table} AS main SET "));
+            let mut first = true;
+            
+            let attributes: Vec<_> = schema.persisted_attributes().filter(|a| values.contains_key(a.id)).collect();
+            for a in &attributes {
+                if !first { builder.push(", "); }
+                first = false;
+                builder.push(format!("{} = ", PostgresUtils::quote_identifier(a.column)?));
+                PostgresQuery::push_bind_value(&mut builder, values.get(a.id).unwrap());
+            }
+
+            if let Some(val) = values.get(database_core::FIELD_UPDATED_AT) {
+                if !first { builder.push(", "); }
+                builder.push(format!("{} = ", PostgresUtils::quote_identifier(database_core::COLUMN_UPDATED_AT)?));
+                PostgresQuery::push_bind_value(&mut builder, val);
+            }
+
+            if values.contains_key(database_core::FIELD_PERMISSIONS) {
+                return Err(DatabaseError::Other("update_many does not support updating permissions".into()));
+            }
+
+            let mut has_where = false;
+            PostgresQuery::push_document_action_condition(&mut builder, &context, schema, "main", PermissionEnum::Update, &mut has_where)?;
+            PostgresQuery::push_filters(&mut builder, schema, &query, &mut has_where)?;
+            
+            let res = builder.build().execute(&pool).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+            Ok(res.rows_affected() as u64)
+        })
     }
 
     fn delete(&self, context: &Context, schema: &'static CollectionSchema, id: &str) -> AdapterFuture<'_, Result<bool, DatabaseError>> {
@@ -209,8 +284,19 @@ impl StorageAdapter for PostgresAdapter {
         })
     }
 
-    fn delete_many(&self, _context: &Context, _schema: &'static CollectionSchema, _query: &QuerySpec) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
-        Box::pin(async move { Err(DatabaseError::Other("delete_many not implemented yet".into())) })
+    fn delete_many(&self, context: &Context, schema: &'static CollectionSchema, query: &QuerySpec) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
+        let pool = self.pool.clone();
+        let context = context.clone();
+        let query = query.clone();
+        Box::pin(async move {
+            let table = PostgresUtils::qualified_table_name(&context, schema.id)?;
+            let mut builder = QueryBuilder::<Postgres>::new(format!("DELETE FROM {table} AS main"));
+            let mut has_where = false;
+            PostgresQuery::push_document_action_condition(&mut builder, &context, schema, "main", PermissionEnum::Delete, &mut has_where)?;
+            PostgresQuery::push_filters(&mut builder, schema, &query, &mut has_where)?;
+            let res = builder.build().execute(&pool).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+            Ok(res.rows_affected() as u64)
+        })
     }
 
     fn find(&self, context: &Context, schema: &'static CollectionSchema, query: &QuerySpec) -> AdapterFuture<'_, Result<Vec<StorageRecord>, DatabaseError>> {

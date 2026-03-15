@@ -20,8 +20,23 @@ include!(concat!(
     "/examples/codegen/virtual_models.rs"
 ));
 
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct DisplayName(String);
+
+impl nx_db::IntoStorage for DisplayName {
+    fn into_storage(self) -> StorageValue {
+        StorageValue::String(self.0)
+    }
+}
+
+impl nx_db::FromStorage for DisplayName {
+    fn from_storage(value: StorageValue) -> Result<Self, DatabaseError> {
+        match value {
+            StorageValue::String(s) => Ok(DisplayName(s)),
+            _ => Err(DatabaseError::Other("expected string for DisplayName".into())),
+        }
+    }
+}
 
 impl DisplayName {
     fn new(value: impl Into<String>) -> Self {
@@ -82,7 +97,7 @@ impl StorageAdapter for FakeAdapter {
         &self,
         context: &Context,
         schema: &'static nx_db::CollectionSchema,
-        values: StorageRecord,
+        mut values: StorageRecord,
     ) -> AdapterFuture<'_, Result<StorageRecord, DatabaseError>> {
         let rows = self.rows.clone();
         let key = (
@@ -93,6 +108,11 @@ impl StorageAdapter for FakeAdapter {
                 _ => return Box::pin(async { Err(DatabaseError::Other("missing id".into())) }),
             },
         );
+
+        values.entry(nx_db::FIELD_SEQUENCE.to_string()).or_insert(StorageValue::Int(1));
+        values.entry(nx_db::FIELD_CREATED_AT.to_string()).or_insert_with(|| StorageValue::Timestamp(sqlx::types::time::OffsetDateTime::now_utc()));
+        values.entry(nx_db::FIELD_UPDATED_AT.to_string()).or_insert_with(|| StorageValue::Timestamp(sqlx::types::time::OffsetDateTime::now_utc()));
+        values.entry(nx_db::FIELD_PERMISSIONS.to_string()).or_insert(StorageValue::StringArray(vec![]));
 
         Box::pin(async move {
             rows.lock().expect("rows lock").insert(key, values.clone());
@@ -112,17 +132,24 @@ impl StorageAdapter for FakeAdapter {
 
         Box::pin(async move {
             let mut locked = rows.lock().expect("rows lock");
-            for record in &values {
+            let mut updated_values = Vec::new();
+            for mut record in values {
                 let id = match record.get(nx_db::FIELD_ID) {
                     Some(StorageValue::String(value)) => value.clone(),
                     _ => return Err(DatabaseError::Other("missing id".into())),
                 };
+                record.entry(nx_db::FIELD_SEQUENCE.to_string()).or_insert(StorageValue::Int(1));
+                record.entry(nx_db::FIELD_CREATED_AT.to_string()).or_insert_with(|| StorageValue::Timestamp(sqlx::types::time::OffsetDateTime::now_utc()));
+                record.entry(nx_db::FIELD_UPDATED_AT.to_string()).or_insert_with(|| StorageValue::Timestamp(sqlx::types::time::OffsetDateTime::now_utc()));
+                record.entry(nx_db::FIELD_PERMISSIONS.to_string()).or_insert(StorageValue::StringArray(vec![]));
+
                 locked.insert(
                     (schema_name.clone(), collection.clone(), id),
                     record.clone(),
                 );
+                updated_values.push(record);
             }
-            Ok(values)
+            Ok(updated_values)
         })
     }
 
@@ -326,42 +353,57 @@ impl StorageAdapter for FakeAdapter {
 }
 
 fn matches_filter(record: &StorageRecord, filter: &Filter) -> bool {
-    let value = record.get(&filter.field.to_string());
+    match filter {
+        Filter::Field { field, op } => {
+            let value = record.get(&field.to_string());
 
-    match &filter.op {
-        FilterOp::Eq(expected) => value == Some(expected),
-        FilterOp::NotEq(expected) => value != Some(expected),
-        FilterOp::In(expected) => value
-            .map(|current| expected.iter().any(|item| item == current))
-            .unwrap_or(false),
-        FilterOp::Gt(expected) => compare_value(value, expected, |ordering| ordering.is_gt()),
-        FilterOp::Gte(expected) => compare_value(value, expected, |ordering| {
-            ordering.is_gt() || ordering.is_eq()
-        }),
-        FilterOp::Lt(expected) => compare_value(value, expected, |ordering| ordering.is_lt()),
-        FilterOp::Lte(expected) => compare_value(value, expected, |ordering| {
-            ordering.is_lt() || ordering.is_eq()
-        }),
-        FilterOp::Contains(expected) => match (value, expected) {
-            (Some(StorageValue::String(s)), StorageValue::String(sub)) => s.contains(sub),
-            _ => false,
-        },
-        FilterOp::StartsWith(expected) => match (value, expected) {
-            (Some(StorageValue::String(s)), StorageValue::String(prefix)) => s.starts_with(prefix),
-            _ => false,
-        },
-        FilterOp::EndsWith(expected) => match (value, expected) {
-            (Some(StorageValue::String(s)), StorageValue::String(suffix)) => s.ends_with(suffix),
-            _ => false,
-        },
-        FilterOp::TextSearch(expected) => match (value, expected) {
-            (Some(StorageValue::String(s)), StorageValue::String(query)) => {
-                s.to_lowercase().contains(&query.to_lowercase())
+            match op {
+                FilterOp::Eq(expected) => value == Some(&expected),
+                FilterOp::NotEq(expected) => value != Some(&expected),
+                FilterOp::In(expected) => value
+                    .map(|current| expected.iter().any(|item| item == current))
+                    .unwrap_or(false),
+                FilterOp::Gt(expected) => {
+                    compare_value(value, &expected, |ordering| ordering.is_gt())
+                }
+                FilterOp::Gte(expected) => compare_value(value, &expected, |ordering| {
+                    ordering.is_gt() || ordering.is_eq()
+                }),
+                FilterOp::Lt(expected) => {
+                    compare_value(value, &expected, |ordering| ordering.is_lt())
+                }
+                FilterOp::Lte(expected) => compare_value(value, &expected, |ordering| {
+                    ordering.is_lt() || ordering.is_eq()
+                }),
+                FilterOp::Contains(expected) => match (value, expected) {
+                    (Some(StorageValue::String(s)), StorageValue::String(sub)) => s.contains(&*sub),
+                    _ => false,
+                },
+                FilterOp::StartsWith(expected) => match (value, expected) {
+                    (Some(StorageValue::String(s)), StorageValue::String(prefix)) => {
+                        s.starts_with(&*prefix)
+                    }
+                    _ => false,
+                },
+                FilterOp::EndsWith(expected) => match (value, expected) {
+                    (Some(StorageValue::String(s)), StorageValue::String(suffix)) => {
+                        s.ends_with(&*suffix)
+                    }
+                    _ => false,
+                },
+                FilterOp::TextSearch(expected) => match (value, expected) {
+                    (Some(StorageValue::String(s)), StorageValue::String(query)) => {
+                        s.to_lowercase().contains(&query.to_lowercase())
+                    }
+                    _ => false,
+                },
+                FilterOp::IsNull => matches!(value, None | Some(StorageValue::Null)),
+                FilterOp::IsNotNull => !matches!(value, None | Some(StorageValue::Null)),
             }
-            _ => false,
-        },
-        FilterOp::IsNull => matches!(value, None | Some(StorageValue::Null)),
-        FilterOp::IsNotNull => !matches!(value, None | Some(StorageValue::Null)),
+        }
+        Filter::And(filters) => filters.iter().all(|f| matches_filter(record, f)),
+        Filter::Or(filters) => filters.iter().any(|f| matches_filter(record, f)),
+        Filter::Not(filter) => !matches_filter(record, filter),
     }
 }
 
@@ -422,6 +464,7 @@ fn generated_models_compile_and_work_with_repository_api() {
         name: "Ravi".into(),
         email: Some("ravi@example.com".into()),
         active: true,
+        permissions: vec![],
     }))
     .expect("insert should succeed");
 
@@ -465,6 +508,7 @@ fn generated_filtered_models_apply_encode_decode_hooks() {
         id: filtered_app_models::UserId::new("usr_filtered").expect("valid id"),
         name: DisplayName::new("Ravi"),
         active: true,
+        permissions: vec![],
     }))
     .expect("insert should succeed");
 
@@ -546,6 +590,7 @@ fn generated_virtual_models_resolve_after_reads_and_reject_virtual_queries() {
         id: virtual_app_models::UserId::new("usr_virtual").expect("valid id"),
         name: "Ravi".into(),
         active: true,
+        permissions: vec![],
     }))
     .expect("insert should succeed");
 
@@ -556,8 +601,8 @@ fn generated_virtual_models_resolve_after_reads_and_reject_virtual_queries() {
         .expect("row should exist");
     assert_eq!(fetched.profile_label.as_deref(), Some("profile:ravi"));
 
-    let error = block_on(repo.find(QuerySpec::new().filter(Filter {
-        field: "profileLabel".into(),
+    let error = block_on(repo.find(QuerySpec::new().filter(Filter::Field {
+        field: "profileLabel",
         op: FilterOp::Eq(StorageValue::String("profile:ravi".into())),
     })))
     .expect_err("virtual query should be rejected");

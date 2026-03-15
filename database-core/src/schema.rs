@@ -206,6 +206,7 @@ mod tests {
             kind: AttributeKind::String,
             required: true,
             array: false,
+            length: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
@@ -216,6 +217,7 @@ mod tests {
             kind: AttributeKind::Relationship,
             required: false,
             array: false,
+            length: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: Some(RelationshipSchema {

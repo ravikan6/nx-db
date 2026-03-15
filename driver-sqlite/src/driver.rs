@@ -130,8 +130,12 @@ impl StorageAdapter for SqliteAdapter {
         let id = id.to_string();
         Box::pin(async move {
             let table = SqliteUtils::qualified_table_name(&context, schema.id);
-            let mut builder = QueryBuilder::<Sqlite>::new(format!("SELECT * FROM {table} WHERE {COLUMN_ID} = "));
-            builder.push_bind(id);
+            let mut builder = QueryBuilder::<Sqlite>::new(format!("SELECT * FROM {table} AS main "));
+            let mut has_where = false;
+            SqliteQuery::push_condition_separator(&mut builder, &mut has_where);
+            builder.push(format!("main.{} = ", COLUMN_ID));
+            builder.push_bind(&id);
+            SqliteQuery::push_document_action_condition(&mut builder, &context, schema, "main", PermissionEnum::Read, &mut has_where)?;
             let row = builder.build().fetch_optional(&pool).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
             match row {
                 Some(r) => Ok(Some(SqliteUtils::row_to_record(&r, schema)?)),
@@ -140,12 +144,119 @@ impl StorageAdapter for SqliteAdapter {
         })
     }
 
-    fn update(&self, _context: &Context, _schema: &'static CollectionSchema, _id: &str, _values: StorageRecord) -> AdapterFuture<'_, Result<Option<StorageRecord>, DatabaseError>> {
-        Box::pin(async move { Err(DatabaseError::Other("sqlite update not implemented yet".into())) })
+    fn update(&self, context: &Context, schema: &'static CollectionSchema, id: &str, values: StorageRecord) -> AdapterFuture<'_, Result<Option<StorageRecord>, DatabaseError>> {
+        let pool = self.pool.clone();
+        let context = context.clone();
+        let id = id.to_string();
+        Box::pin(async move {
+            let table = SqliteUtils::qualified_table_name(&context, schema.id);
+            let mut tx = pool.begin().await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let mut builder = QueryBuilder::<Sqlite>::new(format!("UPDATE {table} SET "));
+            let mut first = true;
+            
+            let attributes: Vec<_> = schema.persisted_attributes().filter(|a| values.contains_key(a.id)).collect();
+            for a in &attributes {
+                if !first { builder.push(", "); }
+                first = false;
+                builder.push(format!("{} = ", SqliteUtils::quote_identifier(a.column)));
+                SqliteQuery::push_bind_value(&mut builder, values.get(a.id).unwrap());
+            }
+
+            if let Some(val) = values.get(database_core::FIELD_UPDATED_AT) {
+                if !first { builder.push(", "); }
+                first = false;
+                builder.push(format!("{} = ", database_core::COLUMN_UPDATED_AT));
+                SqliteQuery::push_bind_value(&mut builder, val);
+            }
+
+            let permissions = match values.get(database_core::FIELD_PERMISSIONS) {
+                Some(StorageValue::StringArray(v)) => Some(v.clone()),
+                Some(StorageValue::Null) | None => None,
+                _ => return Err(DatabaseError::Other("permissions must be a string array".into())),
+            };
+            if let Some(perms) = &permissions {
+                if !first { builder.push(", "); }
+                builder.push(format!("{} = ", database_core::COLUMN_PERMISSIONS));
+                builder.push_bind(serde_json::to_string(perms).unwrap());
+            }
+
+            // SQLite UPDATE doesn't support table aliases in the main SET clause standardly like Postgres,
+            // so we do subquery for document_action_condition or just use standard UPDATE WHERE.
+            // Wait, SQLite UPDATE doesn't support aliases (AS main) in the UPDATE statement directly.
+            // `UPDATE table SET ... WHERE id = ? AND EXISTS (...)`
+            
+            let mut has_where = false;
+            SqliteQuery::push_condition_separator(&mut builder, &mut has_where);
+            builder.push(format!("{} = ", COLUMN_ID));
+            builder.push_bind(&id);
+            SqliteQuery::push_document_action_condition(&mut builder, &context, schema, &table, PermissionEnum::Update, &mut has_where)?;
+            builder.push(format!(" RETURNING *"));
+            
+            let row = builder.build().fetch_optional(&mut *tx).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let record = match row {
+                Some(r) => SqliteUtils::row_to_record(&r, schema)?,
+                None => return Ok(None),
+            };
+
+            if let Some(perms) = permissions {
+                let seq = record.get(database_core::FIELD_SEQUENCE).unwrap().as_int().unwrap();
+                let perms_table = SqliteUtils::qualified_permissions_table_name(&context, schema.id);
+                sqlx::query(&format!("DELETE FROM {perms_table} WHERE document_id = ?"))
+                    .bind(seq)
+                    .execute(&mut *tx).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+                
+                let grouped_perms = database_core::utils::permission_rows(&perms)?;
+                for (pt, pv) in grouped_perms {
+                    sqlx::query(&format!("INSERT INTO {perms_table} (document_id, permission_type, permissions) VALUES (?, ?, ?)"))
+                        .bind(seq)
+                        .bind(pt)
+                        .bind(serde_json::to_string(&pv).unwrap())
+                        .execute(&mut *tx).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+                }
+            }
+
+            tx.commit().await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+            Ok(Some(record))
+        })
     }
 
-    fn update_many(&self, _context: &Context, _schema: &'static CollectionSchema, _query: &QuerySpec, _values: StorageRecord) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
-        Box::pin(async move { Err(DatabaseError::Other("sqlite update_many not implemented yet".into())) })
+    fn update_many(&self, context: &Context, schema: &'static CollectionSchema, query: &QuerySpec, values: StorageRecord) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
+        let pool = self.pool.clone();
+        let context = context.clone();
+        let query = query.clone();
+        Box::pin(async move {
+            let table = SqliteUtils::qualified_table_name(&context, schema.id);
+            let mut builder = QueryBuilder::<Sqlite>::new(format!("UPDATE {table} SET "));
+            let mut first = true;
+            
+            let attributes: Vec<_> = schema.persisted_attributes().filter(|a| values.contains_key(a.id)).collect();
+            for a in &attributes {
+                if !first { builder.push(", "); }
+                first = false;
+                builder.push(format!("{} = ", SqliteUtils::quote_identifier(a.column)));
+                SqliteQuery::push_bind_value(&mut builder, values.get(a.id).unwrap());
+            }
+
+            if let Some(val) = values.get(database_core::FIELD_UPDATED_AT) {
+                if !first { builder.push(", "); }
+                builder.push(format!("{} = ", database_core::COLUMN_UPDATED_AT));
+                SqliteQuery::push_bind_value(&mut builder, val);
+            }
+
+            if values.contains_key(database_core::FIELD_PERMISSIONS) {
+                return Err(DatabaseError::Other("update_many does not support updating permissions".into()));
+            }
+
+            let mut has_where = false;
+            SqliteQuery::push_document_action_condition(&mut builder, &context, schema, &table, PermissionEnum::Update, &mut has_where)?;
+            for f in query.filters() {
+                SqliteQuery::push_condition_separator(&mut builder, &mut has_where);
+                SqliteQuery::push_filter(&mut builder, schema, f)?;
+            }
+            
+            let res = builder.build().execute(&pool).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+            Ok(res.rows_affected() as u64)
+        })
     }
 
     fn delete(&self, context: &Context, schema: &'static CollectionSchema, id: &str) -> AdapterFuture<'_, Result<bool, DatabaseError>> {
@@ -154,15 +265,32 @@ impl StorageAdapter for SqliteAdapter {
         let id = id.to_string();
         Box::pin(async move {
             let table = SqliteUtils::qualified_table_name(&context, schema.id);
-            let mut builder = QueryBuilder::<Sqlite>::new(format!("DELETE FROM {table} WHERE {COLUMN_ID} = "));
+            let mut builder = QueryBuilder::<Sqlite>::new(format!("DELETE FROM {table} WHERE "));
+            builder.push(format!("{} = ", COLUMN_ID));
             builder.push_bind(id);
+            let mut has_where = true;
+            SqliteQuery::push_document_action_condition(&mut builder, &context, schema, &table, PermissionEnum::Delete, &mut has_where)?;
             let res = builder.build().execute(&pool).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
             Ok(res.rows_affected() > 0)
         })
     }
 
-    fn delete_many(&self, _context: &Context, _schema: &'static CollectionSchema, _query: &QuerySpec) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
-        Box::pin(async move { Err(DatabaseError::Other("sqlite delete_many not implemented yet".into())) })
+    fn delete_many(&self, context: &Context, schema: &'static CollectionSchema, query: &QuerySpec) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
+        let pool = self.pool.clone();
+        let context = context.clone();
+        let query = query.clone();
+        Box::pin(async move {
+            let table = SqliteUtils::qualified_table_name(&context, schema.id);
+            let mut builder = QueryBuilder::<Sqlite>::new(format!("DELETE FROM {table}"));
+            let mut has_where = false;
+            SqliteQuery::push_document_action_condition(&mut builder, &context, schema, &table, PermissionEnum::Delete, &mut has_where)?;
+            for f in query.filters() {
+                SqliteQuery::push_condition_separator(&mut builder, &mut has_where);
+                SqliteQuery::push_filter(&mut builder, schema, f)?;
+            }
+            let res = builder.build().execute(&pool).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+            Ok(res.rows_affected() as u64)
+        })
     }
 
     fn find(&self, context: &Context, schema: &'static CollectionSchema, query: &QuerySpec) -> AdapterFuture<'_, Result<Vec<StorageRecord>, DatabaseError>> {
@@ -171,11 +299,11 @@ impl StorageAdapter for SqliteAdapter {
         let query = query.clone();
         Box::pin(async move {
             let table = SqliteUtils::qualified_table_name(&context, schema.id);
-            let mut builder = QueryBuilder::<Sqlite>::new(format!("SELECT * FROM {table}"));
+            let mut builder = QueryBuilder::<Sqlite>::new(format!("SELECT * FROM {table} AS main"));
             let mut has_where = false;
+            SqliteQuery::push_document_action_condition(&mut builder, &context, schema, "main", PermissionEnum::Read, &mut has_where)?;
             for f in query.filters() {
-                if !has_where { builder.push(" WHERE "); has_where = true; }
-                else { builder.push(" AND "); }
+                SqliteQuery::push_condition_separator(&mut builder, &mut has_where);
                 SqliteQuery::push_filter(&mut builder, schema, f)?;
             }
             if !query.sorts().is_empty() {
@@ -192,7 +320,11 @@ impl StorageAdapter for SqliteAdapter {
             if let Some(l) = query.limit_value() { builder.push(" LIMIT "); builder.push_bind(l as i64); }
             if let Some(o) = query.offset_value() { builder.push(" OFFSET "); builder.push_bind(o as i64); }
             let rows = builder.build().fetch_all(&pool).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
-            rows.into_iter().map(|r| SqliteUtils::row_to_record(&r, schema)).collect()
+            let mut results = Vec::new();
+            for r in rows {
+                results.push(SqliteUtils::row_to_record(&r, schema)?);
+            }
+            Ok(results)
         })
     }
 
@@ -202,11 +334,11 @@ impl StorageAdapter for SqliteAdapter {
         let query = query.clone();
         Box::pin(async move {
             let table = SqliteUtils::qualified_table_name(&context, schema.id);
-            let mut builder = QueryBuilder::<Sqlite>::new(format!("SELECT COUNT(*) FROM {table}"));
+            let mut builder = QueryBuilder::<Sqlite>::new(format!("SELECT COUNT(*) FROM {table} AS main"));
             let mut has_where = false;
+            SqliteQuery::push_document_action_condition(&mut builder, &context, schema, "main", PermissionEnum::Read, &mut has_where)?;
             for f in query.filters() {
-                if !has_where { builder.push(" WHERE "); has_where = true; }
-                else { builder.push(" AND "); }
+                SqliteQuery::push_condition_separator(&mut builder, &mut has_where);
                 SqliteQuery::push_filter(&mut builder, schema, f)?;
             }
             let row = builder.build().fetch_one(&pool).await.map_err(|e| DatabaseError::Other(e.to_string()))?;

@@ -115,6 +115,23 @@ impl SqliteUtils {
                     Ok(StorageValue::TimestampArray(dates))
                 }
             }
-        } else { Err(DatabaseError::Other("scalar json_to_storage_value not implemented".into())) }
+        } else {
+            match kind {
+                AttributeKind::String | AttributeKind::Relationship | AttributeKind::Virtual => {
+                    Ok(StorageValue::String(val.as_str().unwrap_or_default().to_string()))
+                }
+                AttributeKind::Json => {
+                    Ok(StorageValue::Json(val.to_string()))
+                }
+                AttributeKind::Integer => Ok(StorageValue::Int(val.as_i64().unwrap_or_default())),
+                AttributeKind::Boolean => Ok(StorageValue::Bool(val.as_bool().unwrap_or_default())),
+                AttributeKind::Float => Ok(StorageValue::Float(val.as_f64().unwrap_or_default())),
+                AttributeKind::Timestamp => {
+                    let s = val.as_str().ok_or_else(|| DatabaseError::Other("expected string".into()))?;
+                    let dt = OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).map_err(|e| DatabaseError::Other(e.to_string()))?;
+                    Ok(StorageValue::Timestamp(dt))
+                }
+            }
+        }
     }
 }

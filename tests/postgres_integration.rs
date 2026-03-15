@@ -27,6 +27,7 @@ const RESTRICTED_ATTRIBUTES: &[AttributeSchema] = &[AttributeSchema {
     persistence: AttributePersistence::Persisted,
     filters: &[],
     relationship: None,
+    length: None,
 }];
 
 static RESTRICTED_USERS_SCHEMA: CollectionSchema = CollectionSchema {
@@ -48,6 +49,7 @@ static RESTRICTED_USERS_SCHEMA: CollectionSchema = CollectionSchema {
 struct RestrictedUserEntity {
     id: Key<32>,
     name: String,
+    _metadata: nx_db::Metadata,
 }
 
 #[derive(Debug, Clone)]
@@ -79,6 +81,10 @@ impl Model for RestrictedUser {
         &entity.id
     }
 
+    fn entity_metadata(entity: &Self::Entity) -> &nx_db::Metadata {
+        &entity._metadata
+    }
+
     fn create_to_record(
         input: Self::Create,
         _context: &Context,
@@ -108,6 +114,7 @@ impl Model for RestrictedUser {
         Ok(RestrictedUserEntity {
             id: take_required(&mut record, nx_db::FIELD_ID)?,
             name: take_required(&mut record, "name")?,
+            _metadata: nx_db::core::model::extract_metadata(&mut record)?,
         })
     }
 }
@@ -149,7 +156,7 @@ async fn actual_postgres_repo_flow_and_document_security() -> Result<(), Box<dyn
         .with_role(Role::user("reader", None).expect("reader role should parse"));
 
     let registry = app_models::registry()?.register(&RESTRICTED_USERS_SCHEMA)?;
-    let adapter = PostgresAdapter::new(&pool);
+    let adapter = PostgresAdapter::new(pool.clone());
     let database = Database::new(adapter, registry);
 
     let result = async {
@@ -202,6 +209,7 @@ async fn actual_postgres_repo_flow_and_document_security() -> Result<(), Box<dyn
                 name: "Ravi".into(),
                 email: Some("ravi@example.com".into()),
                 active: true,
+                permissions: vec![],
             })
             .await?;
 

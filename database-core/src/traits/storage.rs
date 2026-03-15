@@ -28,6 +28,13 @@ pub enum StorageValue {
 }
 
 impl StorageValue {
+    pub fn as_int(&self) -> Option<i64> {
+        match self {
+            Self::Int(v) => Some(*v),
+            _ => None,
+        }
+    }
+
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Self::String(v) | Self::Json(v) => Some(v),

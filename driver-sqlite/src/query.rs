@@ -131,4 +131,84 @@ impl SqliteQuery {
         }
         Ok(())
     }
+
+    pub fn push_condition_separator(builder: &mut QueryBuilder<'_, Sqlite>, has_conditions: &mut bool) {
+        if *has_conditions { builder.push(" AND "); }
+        else { builder.push(" WHERE "); *has_conditions = true; }
+    }
+
+    pub fn authorization_context(context: &database_core::Context) -> database_core::utils::AuthorizationContext {
+        let roles = context.roles().cloned().collect::<Vec<database_core::utils::Role>>();
+        if context.authorization_enabled() { database_core::utils::AuthorizationContext::enabled(roles) }
+        else { database_core::utils::AuthorizationContext::disabled(roles) }
+    }
+
+    pub fn permission_roles<'p, I>(permissions: I, action: database_core::utils::PermissionEnum) -> Result<Vec<database_core::utils::Role>, DatabaseError>
+    where I: IntoIterator<Item = &'p str>
+    {
+        let mut roles = Vec::new();
+        for perm_str in permissions {
+            let perm = database_core::utils::Permission::parse(perm_str).map_err(|e| DatabaseError::Other(format!("invalid permission '{perm_str}': {e}")))?;
+            let matches = match (perm.permission(), action) {
+                (database_core::utils::PermissionEnum::Write, database_core::utils::PermissionEnum::Create) | 
+                (database_core::utils::PermissionEnum::Write, database_core::utils::PermissionEnum::Update) | 
+                (database_core::utils::PermissionEnum::Write, database_core::utils::PermissionEnum::Delete) => true,
+                (c, t) => c == t,
+            };
+            if matches { roles.push(perm.role_instance().clone()); }
+        }
+        Ok(roles)
+    }
+
+    pub fn document_action_roles(context: &database_core::Context, schema: &'static CollectionSchema, action: database_core::utils::PermissionEnum) -> Result<Option<Vec<String>>, DatabaseError> {
+        let auth_ctx = Self::authorization_context(context);
+        let collection_roles = Self::permission_roles(schema.permissions.iter().copied(), action)?;
+        match database_core::utils::Authorization::new(action, &auth_ctx).validate(&collection_roles) {
+            Ok(()) => Ok(None),
+            Err(e) if schema.document_security => {
+                match DatabaseError::from(e) {
+                    DatabaseError::Authorization(_) => Ok(Some(auth_ctx.roles().into_iter().map(|r| r.to_string()).collect())),
+                    other => Err(other),
+                }
+            }
+            Err(e) => Err(DatabaseError::from(e)),
+        }
+    }
+
+    pub fn push_document_action_condition(
+        builder: &mut QueryBuilder<'_, Sqlite>,
+        context: &database_core::Context,
+        schema: &'static CollectionSchema,
+        alias: &str,
+        action: database_core::utils::PermissionEnum,
+        has_conditions: &mut bool,
+    ) -> Result<(), DatabaseError> {
+        let Some(roles) = Self::document_action_roles(context, schema, action)? else { return Ok(()); };
+        let perms_table = SqliteUtils::qualified_permissions_table_name(context, schema.id);
+        let alias_quoted = SqliteUtils::quote_identifier(alias);
+
+        Self::push_condition_separator(builder, has_conditions);
+        builder.push("EXISTS (SELECT 1 FROM ");
+        builder.push(perms_table);
+        builder.push(" AS p WHERE p.document_id = ");
+        builder.push(alias_quoted);
+        builder.push(".");
+        builder.push(COLUMN_SEQUENCE);
+        builder.push(" AND p.permission_type = ");
+        builder.push_bind(action.to_string());
+        builder.push(" AND EXISTS (SELECT 1 FROM json_each(p.permissions) WHERE value IN (");
+        
+        if roles.is_empty() {
+            builder.push("NULL");
+        } else {
+            let mut first = true;
+            for role in roles {
+                if !first { builder.push(", "); }
+                first = false;
+                builder.push_bind(role);
+            }
+        }
+        builder.push(")))");
+        Ok(())
+    }
 }

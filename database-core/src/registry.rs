@@ -92,6 +92,7 @@ mod tests {
         kind: AttributeKind::String,
         required: true,
         array: false,
+        length: None,
         persistence: AttributePersistence::Persisted,
         filters: &[],
         relationship: None,

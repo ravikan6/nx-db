@@ -127,8 +127,10 @@ macro_rules! impl_model {
         update: $update_name:ident,
         schema: $schema_const:ident,
         fields: {
-            $($field_id:expr => $field_name:ident : $field_type:ty $([ $decoder:ident ])?),*
+            $($field_id:expr => $field_name:ident : $field_type:ty $([ $encoder:ident, $decoder:ident ])?),*
         }
+        $(, virtuals: { $($virtual_field:ident),* })?
+        $(, resolvers: { $($resolver_field:ident : $resolver_fn:path),* })?
     ) => {
         impl $crate::Model for $model_name {
             type Id = $id_name;
@@ -148,12 +150,21 @@ macro_rules! impl_model {
                 &entity._metadata
             }
 
+            fn resolve_entity<'a>(mut entity: Self::Entity, context: &'a $crate::Context) -> $crate::model::ModelFuture<'a, Result<Self::Entity, $crate::errors::DatabaseError>> {
+                Box::pin(async move {
+                    $($(
+                        entity.$resolver_field = Some($resolver_fn(&entity, context).await?);
+                    )*)?
+                    Ok(entity)
+                })
+            }
+
             fn create_to_record(input: Self::Create, _context: &$crate::Context) -> Result<$crate::traits::storage::StorageRecord, $crate::errors::DatabaseError> {
                 let mut record = $crate::traits::storage::StorageRecord::new();
                 $crate::insert_value(&mut record, $crate::FIELD_ID, input.id);
                 $crate::insert_value(&mut record, $crate::FIELD_PERMISSIONS, input.permissions);
                 $(
-                    $crate::impl_model!(@insert_create record, $field_id, input.$field_name);
+                    $crate::impl_model!(@insert_create record, $field_id, input.$field_name $(, $encoder)?);
                 )*
                 Ok(record)
             }
@@ -164,7 +175,7 @@ macro_rules! impl_model {
                     $crate::insert_value(&mut record, $crate::FIELD_PERMISSIONS, value);
                 }
                 $(
-                    $crate::impl_model!(@insert_update record, $field_id, input.$field_name);
+                    $crate::impl_model!(@insert_update record, $field_id, input.$field_name $(, $encoder)?);
                 )*
                 Ok(record)
             }
@@ -182,6 +193,9 @@ macro_rules! impl_model {
                     $(
                         $field_name: $crate::impl_model!(@get_field record, $field_id, $field_type $(, $decoder)?),
                     )*
+                    $($(
+                        $virtual_field: None,
+                    )*)?
                 })
             }
         }
@@ -191,11 +205,19 @@ macro_rules! impl_model {
     (@insert_create $record:ident, $id:expr, $val:expr) => {
         $crate::insert_value(&mut $record, $id, $val);
     };
+    (@insert_create $record:ident, $id:expr, $val:expr, $encoder:ident) => {
+        $crate::insert_value(&mut $record, $id, $encoder($val)?);
+    };
 
     // Helper for update_to_record
     (@insert_update $record:ident, $id:expr, $val:expr) => {
         if let $crate::Patch::Set(value) = $val {
             $crate::insert_value(&mut $record, $id, value);
+        }
+    };
+    (@insert_update $record:ident, $id:expr, $val:expr, $encoder:ident) => {
+        if let $crate::Patch::Set(value) = $val {
+            $crate::insert_value(&mut $record, $id, $encoder(value)?);
         }
     };
 

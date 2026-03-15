@@ -1124,6 +1124,7 @@ mod tests {
         kind: AttributeKind::String,
         required: true,
         array: false,
+        length: None,
         persistence: AttributePersistence::Persisted,
         filters: &[],
         relationship: None,
@@ -1501,10 +1502,37 @@ mod tests {
         }
     }
 
-    #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+    #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
     struct UserEntity {
         id: Key<32>,
         name: String,
+        metadata: crate::model::Metadata,
+    }
+
+    fn extract_metadata(record: &mut StorageRecord) -> crate::model::Metadata {
+        use crate::system_fields::*;
+        crate::model::Metadata {
+            sequence: match record.remove(FIELD_SEQUENCE) {
+                Some(StorageValue::Int(v)) => v,
+                _ => 0,
+            },
+            uid: match record.get(FIELD_ID) {
+                Some(StorageValue::String(v)) => v.clone(),
+                _ => "".into(),
+            },
+            created_at: match record.remove(FIELD_CREATED_AT) {
+                Some(StorageValue::Timestamp(v)) => v,
+                _ => time::OffsetDateTime::now_utc(),
+            },
+            updated_at: match record.remove(FIELD_UPDATED_AT) {
+                Some(StorageValue::Timestamp(v)) => v,
+                _ => time::OffsetDateTime::now_utc(),
+            },
+            permissions: match record.get(FIELD_PERMISSIONS) {
+                Some(StorageValue::StringArray(v)) => v.clone(),
+                _ => vec![],
+            },
+        }
     }
 
     #[derive(Debug, Clone)]
@@ -1539,6 +1567,10 @@ mod tests {
             &entity.id
         }
 
+        fn entity_metadata(entity: &Self::Entity) -> &crate::model::Metadata {
+            &entity.metadata
+        }
+
         fn create_to_record(
             input: Self::Create,
             _context: &crate::Context,
@@ -1566,6 +1598,7 @@ mod tests {
             mut record: StorageRecord,
             _context: &crate::Context,
         ) -> Result<Self::Entity, DatabaseError> {
+            let metadata = extract_metadata(&mut record);
             let id = match record.remove(crate::system_fields::FIELD_ID) {
                 Some(StorageValue::String(value)) => Key::<32>::new(value)?,
                 None => match record.remove(crate::FIELD_ID) {
@@ -1580,7 +1613,7 @@ mod tests {
                 _ => return Err(DatabaseError::Other("missing name".into())),
             };
 
-            Ok(UserEntity { id, name })
+            Ok(UserEntity { id, name, metadata })
         }
     }
 
@@ -1599,6 +1632,10 @@ mod tests {
 
         fn entity_to_id(entity: &Self::Entity) -> &Self::Id {
             &entity.id
+        }
+
+        fn entity_metadata(entity: &Self::Entity) -> &crate::model::Metadata {
+            &entity.metadata
         }
 
         fn create_to_record(
@@ -1638,6 +1675,10 @@ mod tests {
 
         fn entity_to_id(entity: &Self::Entity) -> &Self::Id {
             &entity.id
+        }
+
+        fn entity_metadata(entity: &Self::Entity) -> &crate::model::Metadata {
+            &entity.metadata
         }
 
         fn create_to_record(
@@ -1749,6 +1790,10 @@ mod tests {
 
             fn entity_to_id(entity: &Self::Entity) -> &Self::Id {
                 &entity.id
+            }
+
+            fn entity_metadata(entity: &Self::Entity) -> &crate::model::Metadata {
+                &entity.metadata
             }
 
             fn create_to_record(
@@ -1869,6 +1914,10 @@ mod tests {
 
             fn entity_to_id(entity: &Self::Entity) -> &Self::Id {
                 &entity.id
+            }
+
+            fn entity_metadata(entity: &Self::Entity) -> &crate::model::Metadata {
+                &entity.metadata
             }
 
             fn create_to_record(
@@ -2492,12 +2541,12 @@ mod tests {
                 }
             }
             crate::query::Filter::And(filters) => {
-                filters.iter().all(|f| Self::matches_filter(record, f))
+                filters.iter().all(|f| matches_filter(record, f))
             }
             crate::query::Filter::Or(filters) => {
-                filters.iter().any(|f| Self::matches_filter(record, f))
+                filters.iter().any(|f| matches_filter(record, f))
             }
-            crate::query::Filter::Not(filter) => !Self::matches_filter(record, filter),
+            crate::query::Filter::Not(filter) => !matches_filter(record, filter),
         }
     }
 

@@ -8,7 +8,17 @@ use time::OffsetDateTime;
 
 pub type ModelFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub fn extract_metadata(record: &mut crate::traits::storage::StorageRecord) -> Result<Metadata, crate::errors::DatabaseError> {
+    Ok(Metadata {
+        sequence: crate::take_required(record, crate::FIELD_SEQUENCE)?,
+        uid: crate::take_required(record, crate::FIELD_ID)?,
+        created_at: crate::take_required(record, crate::FIELD_CREATED_AT)?,
+        updated_at: crate::take_required(record, crate::FIELD_UPDATED_AT)?,
+        permissions: crate::take_required(record, crate::FIELD_PERMISSIONS)?,
+    })
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Metadata {
     pub sequence: i64,
     pub uid: String,
