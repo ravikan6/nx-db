@@ -13,6 +13,9 @@ pub mod postgres {
 #[cfg(feature = "sqlite")]
 pub mod sqlite {
     pub use driver_sqlite::SqliteAdapter;
+    pub mod migration {
+        pub use driver_sqlite::migration::*;
+    }
 }
 
 pub mod prelude {

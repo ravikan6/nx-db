@@ -85,16 +85,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let spec = parse_project_spec(&contents)?;
             validate_project_spec(&spec)?;
 
+            let context = nx_db::Context::default().with_schema(&schema);
+            let collections: Vec<&dyn nx_db::traits::migration::MigrationCollection> = spec
+                .collections
+                .iter()
+                .map(|c| c as &dyn nx_db::traits::migration::MigrationCollection)
+                .collect();
+
             if url.starts_with("postgres://") {
                 let pool = sqlx::PgPool::connect(&url).await?;
                 let engine = nx_db::postgres::migration::MigrationEngine::new(&pool);
-                let context = nx_db::Context::default().with_schema(&schema);
-
-                let collections: Vec<&dyn nx_db::traits::migration::MigrationCollection> = spec
-                    .collections
-                    .iter()
-                    .map(|c| c as &dyn nx_db::traits::migration::MigrationCollection)
-                    .collect();
 
                 let quoted_schema = nx_db::postgres::PostgresAdapter::quote_identifier(&schema)?;
                 sqlx::query(&format!("CREATE SCHEMA IF NOT EXISTS {}", quoted_schema))
@@ -108,7 +108,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     return Ok(());
                 }
 
-                println!("Pending changes:");
+                println!("Pending changes (Postgres):");
                 for change in &changes {
                     match change {
                         nx_db::postgres::migration::MigrationChange::CreateTable(id) => {
@@ -134,30 +134,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     println!("Migration successful.");
                 }
             } else if url.starts_with("sqlite:") {
-                let pool = sqlx::SqlitePool::connect(&url).await?;
-                let _adapter = nx_db::sqlite::SqliteAdapter::new(pool);
-                let _context = nx_db::Context::default().with_schema(&schema);
+                use sqlx::sqlite::SqliteConnectOptions;
+                use std::str::FromStr;
+                let options = SqliteConnectOptions::from_str(&url)?
+                    .create_if_missing(true);
+                let pool = sqlx::SqlitePool::connect_with(options).await?;
+                let engine = nx_db::sqlite::migration::MigrationEngine::new(&pool);
 
-                println!("Applying migrations for SQLite (simple mode)...");
-                for coll in &spec.collections {
-                    println!("  - Ensure table {}", coll.id);
-                    if !dry_run {
-                        // Static mapping for demo/benchmark purposes. 
-                        // In real CLI we would need a proper registry or static schema ref.
-                        // For benchmarks we know the schema is fixed.
-                        // This is a bit hacky but works for the current request.
-                        // Real implementation would use MigrationEngine for SQLite too.
+                let changes = engine.diff(&context, &collections).await?;
+
+                if changes.is_empty() {
+                    println!("Database is up to date.");
+                    return Ok(());
+                }
+
+                println!("Pending changes (SQLite):");
+                for change in &changes {
+                    match change {
+                        nx_db::sqlite::migration::MigrationChange::CreateTable(id) => {
+                            println!("  - Create table {}", id);
+                        }
+                        nx_db::sqlite::migration::MigrationChange::AddColumn { table, column, sql_type, .. } => {
+                            println!("  - Add column {}.{} ({})", table, column, sql_type);
+                        }
                     }
                 }
-                
+
                 if dry_run {
-                    println!("Dry run: no changes applied.");
+                    println!("Dry run: skipping application of changes.");
                 } else {
-                    // For now, since SQLite MigrationEngine is missing, 
-                    // we'll just say successful if we can connect.
-                    // The benchmark actually doesn't strictly depend on CLI migrate if it's just one table,
-                    // but the user wants to run BOTH benchmarks.
-                    println!("SQLite migration (simple) successful.");
+                    println!("Applying changes...");
+                    engine.migrate(&context, &collections).await?;
+                    println!("Migration successful.");
                 }
             } else {
                 return Err(format!("Unsupported database protocol in URL: {}", url).into());
