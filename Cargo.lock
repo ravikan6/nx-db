@@ -85,6 +85,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-trait"
+version = "0.1.89"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9035ad2d096bed7955a320ee7e2230574d28fd3c3a0f186cbea1ff3c7eed5dbb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "atoi"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -453,6 +464,19 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
+]
+
+[[package]]
+name = "driver-sqlite"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "database-core",
+ "futures",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "time",
 ]
 
 [[package]]
@@ -934,6 +958,7 @@ version = "0.30.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2e99fb7a497b1e3339bc746195567ed8d3e24945ecd636e3619d20b9de9e9149"
 dependencies = [
+ "cc",
  "pkg-config",
  "vcpkg",
 ]
@@ -1075,6 +1100,7 @@ dependencies = [
  "database-cache",
  "database-core",
  "driver-postgres",
+ "driver-sqlite",
  "serde",
  "sqlx",
  "tokio",

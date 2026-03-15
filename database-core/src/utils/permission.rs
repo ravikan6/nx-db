@@ -213,6 +213,39 @@ impl FromStr for Permission {
     }
 }
 
+use std::collections::BTreeMap;
+use crate::errors::DatabaseError;
+
+pub fn permission_rows(
+    permissions: &[String],
+) -> Result<BTreeMap<String, Vec<String>>, DatabaseError> {
+    let mut rows: BTreeMap<String, Vec<String>> = BTreeMap::new();
+
+    for value in permissions {
+        let permission = Permission::parse(value).map_err(|error| {
+            DatabaseError::Other(format!("invalid permission '{value}': {error}"))
+        })?;
+
+        let permission_types = match permission.permission() {
+            PermissionEnum::Write => vec![
+                PermissionEnum::Write,
+                PermissionEnum::Create,
+                PermissionEnum::Update,
+                PermissionEnum::Delete,
+            ],
+            other => vec![other],
+        };
+
+        for permission_type in permission_types {
+            rows.entry(permission_type.to_string())
+                .or_default()
+                .push(permission.role_instance().to_string());
+        }
+    }
+
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Permission, PermissionEnum};

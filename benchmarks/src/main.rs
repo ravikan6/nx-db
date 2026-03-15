@@ -2,6 +2,7 @@ use nx_db::prelude::*;
 use nx_db::{db_context, db_query, db_registry, and, or};
 use rand::Rng;
 use std::time::{Duration, Instant};
+use std::sync::Arc;
 
 mod models {
     include!(concat!(
@@ -123,14 +124,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenvy::dotenv().ok();
     let url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
 
-    println!("Connecting to database...");
-    let pool = nx_db::db_connect!(&url).await?;
-
-    let db = Database::builder()
-        .with_adapter(nx_db::postgres::PostgresAdapter::new(&pool))
-        .with_registry(registry()?)
-        .with_cache(nx_db::cache::MemoryCacheBackend::default())
-        .build()?;
+    println!("Connecting to database: {}...", url);
+    
+    let db = if url.starts_with("postgres://") {
+        let pool = sqlx::PgPool::connect(&url).await?;
+        Database::builder()
+            .with_adapter(nx_db::postgres::PostgresAdapter::new(&pool))
+            .with_registry(registry()?)
+            .with_cache(nx_db::cache::MemoryCacheBackend::default())
+            .build()?
+    } else if url.starts_with("sqlite://") {
+        let pool = sqlx::SqlitePool::connect(&url).await?;
+        Database::builder()
+            .with_adapter(nx_db::sqlite::SqliteAdapter::new(&pool))
+            .with_registry(registry()?)
+            .with_cache(nx_db::cache::MemoryCacheBackend::default())
+            .build()?
+    } else {
+        panic!("Unsupported database URL protocol");
+    };
 
     let ctx = db_context!(schema: "nuvix_bench", role: Role::any());
     let db_scoped = db.scope(ctx.clone());
@@ -150,8 +162,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut insert_stats = Stats::with_ops("insert_many — full round", total_records);
 
     for round in 0..insert_rounds {
-        sqlx::query("TRUNCATE TABLE nuvix_bench.users, nuvix_bench.posts, nuvix_bench.users_perms, nuvix_bench.posts_perms CASCADE")
-            .execute(&pool).await?;
+        // Simple cleanup - might need adjustment per DB
+        if url.starts_with("postgres://") {
+            sqlx::query("TRUNCATE TABLE nuvix_bench.users, nuvix_bench.posts, nuvix_bench.users_perms, nuvix_bench.posts_perms CASCADE").execute(db.adapter().pool_any()).await?;
+        } else {
+            sqlx::query("DELETE FROM users").execute(db.adapter().pool_any()).await?;
+            sqlx::query("DELETE FROM posts").execute(db.adapter().pool_any()).await?;
+            sqlx::query("DELETE FROM users_perms").execute(db.adapter().pool_any()).await?;
+            sqlx::query("DELETE FROM posts_perms").execute(db.adapter().pool_any()).await?;
+        }
 
         let start = Instant::now();
         let users = user_repo.insert_many(make_users(round, user_count)).await?;
@@ -166,8 +185,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     insert_stats.print();
 
     // ── Seed clean dataset for remaining benchmarks ───────────────────────────
-    sqlx::query("TRUNCATE TABLE nuvix_bench.users, nuvix_bench.posts, nuvix_bench.users_perms, nuvix_bench.posts_perms CASCADE")
-        .execute(&pool).await?;
+    if url.starts_with("postgres://") {
+        sqlx::query("TRUNCATE TABLE nuvix_bench.users, nuvix_bench.posts, nuvix_bench.users_perms, nuvix_bench.posts_perms CASCADE").execute(db.adapter().pool_any()).await?;
+    } else {
+        sqlx::query("DELETE FROM users").execute(db.adapter().pool_any()).await?;
+        sqlx::query("DELETE FROM posts").execute(db.adapter().pool_any()).await?;
+    }
 
     let seed_users = user_repo.insert_many(make_users(99, user_count)).await?;
     post_repo

@@ -10,16 +10,29 @@ pub mod postgres {
     }
 }
 
+#[cfg(feature = "sqlite")]
+pub mod sqlite {
+    pub use driver_sqlite::SqliteAdapter;
+}
+
 pub mod prelude {
     pub use crate::core::{Context, Database, Filter, Key, Model, QuerySpec, Repository, Role};
     #[cfg(feature = "postgres")]
     pub use crate::postgres::PostgresAdapter;
+    #[cfg(feature = "sqlite")]
+    pub use crate::sqlite::SqliteAdapter;
 }
 
-#[cfg(feature = "postgres")]
+#[cfg(any(feature = "postgres", feature = "sqlite"))]
 #[macro_export]
 macro_rules! db_connect {
-    ($url:expr) => {
+    (postgres, $url:expr) => {
         sqlx::PgPool::connect($url)
+    };
+    (sqlite, $url:expr) => {
+        sqlx::SqlitePool::connect($url)
+    };
+    ($url:expr) => {
+        sqlx::AnyPool::connect($url)
     };
 }

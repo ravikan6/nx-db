@@ -106,4 +106,6 @@ pub trait StorageAdapter: Send + Sync {
         schema: &'static CollectionSchema,
         query: &QuerySpec,
     ) -> AdapterFuture<'_, Result<u64, DatabaseError>>;
+
+    fn pool_any(&self) -> &sqlx::AnyPool;
 }

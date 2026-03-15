@@ -14,11 +14,15 @@ use std::collections::BTreeMap;
 #[derive(Clone)]
 pub struct PostgresAdapter<'a> {
     pool: &'a Pool<Postgres>,
+    any_pool: sqlx::AnyPool,
 }
 
 impl<'a> PostgresAdapter<'a> {
     pub fn new(pool: &'a Pool<Postgres>) -> Self {
-        Self { pool }
+        Self {
+            pool,
+            any_pool: pool.clone().into(),
+        }
     }
 
     fn is_valid_identifier(identifier: &str) -> bool {
@@ -292,36 +296,6 @@ impl<'a> PostgresAdapter<'a> {
                 "record field '{key}' must be a timestamp"
             ))),
         }
-    }
-
-    fn permission_rows(
-        permissions: &[String],
-    ) -> Result<BTreeMap<String, Vec<String>>, DatabaseError> {
-        let mut rows: BTreeMap<String, Vec<String>> = BTreeMap::new();
-
-        for value in permissions {
-            let permission = Permission::parse(value).map_err(|error| {
-                DatabaseError::Other(format!("invalid permission '{value}': {error}"))
-            })?;
-
-            let permission_types = match permission.permission() {
-                PermissionEnum::Write => vec![
-                    PermissionEnum::Write,
-                    PermissionEnum::Create,
-                    PermissionEnum::Update,
-                    PermissionEnum::Delete,
-                ],
-                other => vec![other],
-            };
-
-            for permission_type in permission_types {
-                rows.entry(permission_type.to_string())
-                    .or_default()
-                    .push(permission.role_instance().to_string());
-            }
-        }
-
-        Ok(rows)
     }
 
     fn validate_context_support(context: &Context) -> Result<(), DatabaseError> {
@@ -1112,7 +1086,7 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
             builder.push(")");
 
             let perms_table = Self::qualified_permissions_table_name(&context, schema.id)?;
-            let grouped_perms = Self::permission_rows(&permissions)?;
+            let grouped_perms = database_core::utils::permission_rows(&permissions)?;
 
             if !grouped_perms.is_empty() {
                 builder.push(format!(", sync_perms AS (INSERT INTO {perms_table} (document_id, permission_type, permissions) "));
@@ -1244,7 +1218,7 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
 
                 for (permissions, record) in &row_data {
                     let uid = Self::extract_string(record, FIELD_ID).unwrap_or_default();
-                    let grouped = Self::permission_rows(permissions)?;
+                    let grouped = database_core::utils::permission_rows(permissions)?;
                     for (pt, pv) in grouped {
                         if perm_data_count > 0 {
                             builder.push(" UNION ALL ");
@@ -1401,7 +1375,7 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
 
             if permissions_update {
                 let perms_table = Self::qualified_permissions_table_name(&context, schema.id)?;
-                let grouped_perms = Self::permission_rows(&permissions)?;
+                let grouped_perms = database_core::utils::permission_rows(&permissions)?;
 
                 builder.push(format!(", clear_perms AS (DELETE FROM {perms_table} WHERE document_id = (SELECT _sequence FROM updated))"));
 
@@ -1502,7 +1476,7 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
 
             if permissions_update {
                 let perms_table = Self::qualified_permissions_table_name(&context, schema.id)?;
-                let grouped_perms = Self::permission_rows(&permissions)?;
+                let grouped_perms = database_core::utils::permission_rows(&permissions)?;
 
                 builder.push(format!(", clear_perms AS (DELETE FROM {perms_table} WHERE document_id IN (SELECT _sequence FROM updated))"));
 
@@ -1712,6 +1686,10 @@ impl<'a> StorageAdapter for PostgresAdapter<'a> {
                     DatabaseError::Other(format!("postgres count decode failed: {error}"))
                 })
         })
+    }
+
+    fn pool_any(&self) -> &sqlx::AnyPool {
+        &self.any_pool
     }
 }
 

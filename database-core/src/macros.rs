@@ -204,6 +204,6 @@ macro_rules! impl_model {
         $crate::get_optional::<$type>(&$record, $id)?.unwrap_or_default()
     };
     (@get_field $record:ident, $id:expr, $type:ty, $decoder:ident) => {
-        $crate::get_optional::<$type>(&$record, $id)?.map($decoder).transpose()?.unwrap_or_default()
+        $crate::get_optional::<$type>(&$record, $id)?.map(|v| $decoder(v)).transpose()?.unwrap_or_default()
     };
 }
