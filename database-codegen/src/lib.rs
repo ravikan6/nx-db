@@ -1009,8 +1009,11 @@ fn entity_field_type(
 
     if attribute.required {
         Ok(base)
-    } else {
+    } else if attribute.filters.is_empty() {
         Ok(format!("Option<{base}>"))
+    } else {
+        // base already contains Option if needed because it came from attribute_filter_helpers
+        Ok(base)
     }
 }
 
