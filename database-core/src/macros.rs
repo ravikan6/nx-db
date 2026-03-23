@@ -292,7 +292,7 @@ macro_rules! impl_model {
     };
     (@insert_create $record:ident, $id:expr, $val:expr;; $encoder:ident) => {
         if let Some(value) = $val {
-            $crate::insert_value(&mut $record, $id, $encoder(value)?);
+            $crate::insert_value(&mut $record, $id, $encoder(Some(value))?);
         }
     };
 
