@@ -81,6 +81,8 @@ pub use database_core::{
     insert_value,
     take_optional,
     take_required,
+    // Time
+    time,
 };
 
 // ── Macro re-exports ──────────────────────────────────────────────────────────
