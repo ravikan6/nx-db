@@ -12,7 +12,7 @@
         "update(\"any\")",
         "delete(\"any\")"
       ],
-      "idMaxLength": 32,
+      "idMaxLength": 48,
       "indexes": [
         {
           "id": "users_email_unique",

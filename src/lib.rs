@@ -46,10 +46,12 @@ pub use database_core::{
     FilterOp,
     // Value helpers
     FromStorage,
+    // Key
+    GENERATED_ID_MIN_LENGTH,
+    GenerateId,
     IndexKind,
     IndexSchema,
     IntoStorage,
-    // Key
     Key,
     // Model
     Metadata,
@@ -76,6 +78,7 @@ pub use database_core::{
     Sort,
     SortDirection,
     StaticRegistry,
+    generate_id_string,
     get_optional,
     get_required,
     insert_value,
@@ -86,7 +89,9 @@ pub use database_core::{
 };
 
 // ── Macro re-exports ──────────────────────────────────────────────────────────
-pub use database_core::{and, db_context, db_query, db_registry, impl_model, not, or};
+pub use database_core::{
+    and, db_context, db_query, db_registry, impl_create_builder, impl_model, not, or,
+};
 
 // ── Driver feature modules ────────────────────────────────────────────────────
 #[cfg(feature = "postgres")]

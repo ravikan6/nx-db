@@ -21,7 +21,7 @@
         "update(\"any\")",
         "delete(\"any\")"
       ],
-      "idMaxLength": 32,
+      "idMaxLength": 48,
       "attributes": [
         {
           "id": "name",

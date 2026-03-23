@@ -44,7 +44,7 @@ pub use errors::{
 pub use events::{Event, EventBus, NoopEventBus};
 
 // ── Key ───────────────────────────────────────────────────────────────────────
-pub use key::Key;
+pub use key::{GENERATED_ID_MIN_LENGTH, GenerateId, Key, generate_id_string};
 
 // ── Model ─────────────────────────────────────────────────────────────────────
 pub use model::{Metadata, Model, ModelFuture};

@@ -55,7 +55,7 @@
           "type": "array",
           "items": { "type": "string" }
         },
-        "idMaxLength": { "type": "integer", "default": 255 },
+        "idMaxLength": { "type": "integer", "default": 255, "minimum": 36 },
         "indexes": {
           "type": "array",
           "items": { "$ref": "#/definitions/index" }
@@ -75,7 +75,16 @@
         "length": { "type": "integer" },
         "kind": {
           "type": "string",
-          "enum": ["string", "integer", "float", "boolean", "timestamp", "relationship", "virtual", "json"]
+          "enum": [
+            "string",
+            "integer",
+            "float",
+            "boolean",
+            "timestamp",
+            "relationship",
+            "virtual",
+            "json"
+          ]
         },
         "required": { "type": "boolean", "default": false },
         "array": { "type": "boolean", "default": false },

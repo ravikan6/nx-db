@@ -4,16 +4,10 @@
 #[allow(dead_code)]
 #[allow(unused_imports)]
 pub mod virtual_app_models {
-    use nx_db::core::traits::storage::StorageRecord;
-    use nx_db::{
-        AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context,
-        DatabaseError, FIELD_CREATED_AT, FIELD_ID, FIELD_PERMISSIONS, FIELD_SEQUENCE,
-        FIELD_UPDATED_AT, Field, Key, Model, ModelFuture, Patch, QuerySpec, RelationshipKind,
-        RelationshipSchema, RelationshipSide, StaticRegistry, get_optional, get_required,
-        insert_value, take_optional, take_required,
-    };
+    use nx_db::traits::storage::StorageRecord;
+    use nx_db::{insert_value, take_optional, take_required, get_optional, get_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, ModelFuture, Field, Key, Model, Patch, QuerySpec, RelationshipKind, RelationshipSchema, RelationshipSide, StaticRegistry, FIELD_ID, FIELD_SEQUENCE, FIELD_CREATED_AT, FIELD_UPDATED_AT, FIELD_PERMISSIONS};
 
-    pub type UserId = Key<32>;
+    pub type UserId = Key<48>;
 
     #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
     pub struct UserEntity {
@@ -26,11 +20,13 @@ pub mod virtual_app_models {
 
     #[derive(Debug, Clone)]
     pub struct CreateUser {
-        pub id: UserId,
+        pub id: Option<UserId>,
         pub name: String,
         pub active: bool,
         pub permissions: Vec<String>,
     }
+
+    nx_db::impl_create_builder! { create: CreateUser, id: UserId, required: { name: String, active: bool }, optional: {  } }
 
     #[derive(Debug, Clone, Default)]
     pub struct UpdateUser {
@@ -85,21 +81,9 @@ pub mod virtual_app_models {
             relationship: None,
         },
     ];
-    const USERS_INDEXES: &[nx_db::IndexSchema] = &[];
-    pub static USERS_SCHEMA: CollectionSchema = CollectionSchema {
-        id: "users",
-        name: "Users",
-        document_security: true,
-        enabled: true,
-        permissions: &[
-            "read(\"any\")",
-            "create(\"any\")",
-            "update(\"any\")",
-            "delete(\"any\")",
-        ],
-        attributes: USERS_ATTRIBUTES,
-        indexes: USERS_INDEXES,
-    };
+    const USERS_INDEXES: &[nx_db::IndexSchema] = &[
+    ];
+    pub static USERS_SCHEMA: CollectionSchema = CollectionSchema { id: "users", name: "Users", document_security: true, enabled: true, permissions: &["read(\"any\")", "create(\"any\")", "update(\"any\")", "delete(\"any\")"], attributes: USERS_ATTRIBUTES, indexes: USERS_INDEXES };
     impl User {
         pub const ID: Field<User, UserId> = Field::new(FIELD_ID);
         pub const NAME: Field<User, String> = Field::new("name");
@@ -107,7 +91,9 @@ pub mod virtual_app_models {
     }
     nx_db::impl_model! { name: User, id: UserId, entity: UserEntity, create: CreateUser, update: UpdateUser, schema: USERS_SCHEMA, fields: {                 "name" => name : String :required,                 "active" => active : bool :required }, virtuals: { profile_label }, resolvers: { profile_label : crate::resolvers::resolve_profile_label } }
     pub fn registry() -> Result<StaticRegistry, DatabaseError> {
-        let registry = StaticRegistry::new().register(&USERS_SCHEMA)?;
+        let registry = StaticRegistry::new()
+            .register(&USERS_SCHEMA)?
+            ;
         Ok(registry)
     }
 }

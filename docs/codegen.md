@@ -54,7 +54,7 @@ Current supported input is JSON:
         "update(\"any\")",
         "delete(\"any\")"
       ],
-      "idMaxLength": 32,
+      "idMaxLength": 48,
       "attributes": [
         {
           "id": "name",
@@ -107,6 +107,11 @@ The generated module currently produces:
 - static `CollectionSchema`
 - static `IndexSchema` metadata
 - a `registry()` function for startup wiring
+
+Generated `Create*` payloads now expose `CreateUser::builder(required...)` and
+`CreateUser::new(required...)`, default `permissions` to an empty list, auto-generate IDs when
+`id` is omitted, and skip writing `None` option fields so database/schema defaults can apply on
+insert.
 
 `Update` structs use `Patch<T>` so nullable fields do not need awkward `Option<Option<T>>`.
 

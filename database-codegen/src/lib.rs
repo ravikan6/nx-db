@@ -285,6 +285,14 @@ pub fn validate_project_spec(spec: &ProjectSpec) -> Result<(), CodegenError> {
             )));
         }
 
+        if collection.id_max_length < database_core::GENERATED_ID_MIN_LENGTH {
+            return Err(CodegenError::Invalid(format!(
+                "collection '{}' idMaxLength must be at least {} to support generated ids",
+                collection.id,
+                database_core::GENERATED_ID_MIN_LENGTH
+            )));
+        }
+
         let mut attribute_ids = BTreeSet::new();
         let mut columns = BTreeSet::new();
 
@@ -543,7 +551,7 @@ fn emit_collection(
 
     writeln!(out, "    #[derive(Debug, Clone)]").unwrap();
     writeln!(out, "    pub struct {create_name} {{").unwrap();
-    writeln!(out, "        pub id: {id_name},").unwrap();
+    writeln!(out, "        pub id: Option<{id_name}>,").unwrap();
     for attribute in &collection.attributes {
         if attribute.kind == AttributeKindSpec::Virtual {
             continue;
@@ -559,6 +567,36 @@ fn emit_collection(
     }
     writeln!(out, "        pub permissions: Vec<String>,").unwrap();
     writeln!(out, "    }}").unwrap();
+    writeln!(out).unwrap();
+
+    let required_create_args = collection
+        .attributes
+        .iter()
+        .filter(|attribute| attribute.kind != AttributeKindSpec::Virtual && attribute.required)
+        .map(|attribute| {
+            let field_name = rust_field_name(&attribute.id);
+            let field_type = entity_field_type(spec, collection, attribute)?;
+            Ok(format!("{field_name}: {field_type}"))
+        })
+        .collect::<Result<Vec<_>, CodegenError>>()?;
+    let optional_create_args = collection
+        .attributes
+        .iter()
+        .filter(|attribute| attribute.kind != AttributeKindSpec::Virtual && !attribute.required)
+        .map(|attribute| {
+            let field_name = rust_field_name(&attribute.id);
+            let field_type = entity_field_type(spec, collection, attribute)?;
+            Ok(format!("{field_name}: {field_type}"))
+        })
+        .collect::<Result<Vec<_>, CodegenError>>()?;
+
+    writeln!(
+        out,
+        "    nx_db::impl_create_builder! {{ create: {create_name}, id: {id_name}, required: {{ {} }}, optional: {{ {} }} }}",
+        required_create_args.join(", "),
+        optional_create_args.join(", ")
+    )
+    .unwrap();
     writeln!(out).unwrap();
 
     writeln!(out, "    #[derive(Debug, Clone, Default)]").unwrap();
@@ -1340,7 +1378,7 @@ mod tests {
           "name": "Users",
           "documentSecurity": true,
           "permissions": ["read(\"any\")", "create(\"any\")"],
-          "idMaxLength": 32,
+          "idMaxLength": 48,
           "indexes": [
             { "id": "users_name_idx", "kind": "key", "attributes": ["name"], "orders": ["asc"] },
             { "id": "users_email_unique", "kind": "unique", "attributes": ["email"] }
@@ -1372,6 +1410,9 @@ mod tests {
         assert!(output.contains("pub struct UserEntity"));
         assert!(output.contains("pub struct CreateUser"));
         assert!(output.contains("pub struct UpdateUser"));
+        assert!(output.contains("pub id: Option<UserId>"));
+        assert!(output.contains("nx_db::impl_create_builder! { create: CreateUser, id: UserId"));
+        assert!(output.contains("required: { name: crate::codecs::DisplayName, active: bool }"));
         assert!(output.contains("Patch<Option<String>>"));
         assert!(output.contains("pub name: crate::codecs::DisplayName"));
         assert!(output.contains("pub profile_label: Option<String>"));

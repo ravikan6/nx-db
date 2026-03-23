@@ -7,7 +7,7 @@ pub mod prod_models {
     use nx_db::traits::storage::StorageRecord;
     use nx_db::{insert_value, take_optional, take_required, get_optional, get_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, Field, Key, Model, Patch, QuerySpec, RelationshipKind, RelationshipSchema, RelationshipSide, StaticRegistry, FIELD_ID, FIELD_SEQUENCE, FIELD_CREATED_AT, FIELD_UPDATED_AT, FIELD_PERMISSIONS};
 
-    pub type UserId = Key<32>;
+    pub type UserId = Key<48>;
 
     #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
     pub struct UserEntity {
@@ -20,12 +20,14 @@ pub mod prod_models {
 
     #[derive(Debug, Clone)]
     pub struct CreateUser {
-        pub id: UserId,
+        pub id: Option<UserId>,
         pub name: String,
         pub email: String,
         pub metadata: Option<String>,
         pub permissions: Vec<String>,
     }
+
+    nx_db::impl_create_builder! { create: CreateUser, id: UserId, required: { name: String, email: String }, optional: { metadata: Option<String> } }
 
     #[derive(Debug, Clone, Default)]
     pub struct UpdateUser {
@@ -98,7 +100,7 @@ pub mod prod_models {
         pub const METADATA: Field<User, Option<String>> = Field::new("metadata");
     }
     nx_db::impl_model! { name: User, id: UserId, entity: UserEntity, create: CreateUser, update: UpdateUser, schema: USERS_SCHEMA, fields: {                 "name" => name : String :required,                 "email" => email : String :required,                 "metadata" => metadata : Option<String> } }
-    pub type PostId = Key<32>;
+    pub type PostId = Key<48>;
 
     #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
     pub struct PostEntity {
@@ -111,12 +113,14 @@ pub mod prod_models {
 
     #[derive(Debug, Clone)]
     pub struct CreatePost {
-        pub id: PostId,
+        pub id: Option<PostId>,
         pub title: String,
         pub content: Option<String>,
         pub author: String,
         pub permissions: Vec<String>,
     }
+
+    nx_db::impl_create_builder! { create: CreatePost, id: PostId, required: { title: String, author: String }, optional: { content: Option<String> } }
 
     #[derive(Debug, Clone, Default)]
     pub struct UpdatePost {

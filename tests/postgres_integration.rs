@@ -205,14 +205,13 @@ async fn actual_postgres_repo_flow_and_document_security() -> Result<(), Box<dyn
 
         let user_repo = database.scope(context.clone()).repo::<app_models::User>();
         let created = user_repo
-            .insert(app_models::CreateUser {
-                id: app_models::UserId::new("usr_real").expect("valid id"),
-                name: "Ravi".into(),
-                email: Some("ravi@example.com".into()),
-                active: true,
-                permissions: vec![],
-            })
+            .insert(
+                app_models::CreateUser::builder("Ravi".into(), true)
+                    .email(Some("ravi@example.com".into())),
+            )
             .await?;
+
+        assert!(created.id.as_str().len() >= nx_db::GENERATED_ID_MIN_LENGTH);
 
         let fetched = user_repo
             .get(&created.id)

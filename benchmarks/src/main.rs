@@ -67,12 +67,14 @@ fn separator(title: &str) {
 
 fn make_users(round: usize, count: usize) -> Vec<CreateUser> {
     (0..count)
-        .map(|i| CreateUser {
-            id: Key::new(format!("r{}_user_{}", round, i)).unwrap(),
-            name: format!("User {}", i),
-            email: format!("r{}_user{}@example.com", round, i),
-            metadata: Some(format!("{{\"index\": {}}}", i)),
-            permissions: vec!["read(\"any\")".to_string()],
+        .map(|i| {
+            CreateUser::builder(
+                format!("User {}", i),
+                format!("r{}_user{}@example.com", round, i),
+            )
+            .id(Key::new(format!("r{}_user_{}", round, i)).unwrap())
+            .metadata(Some(format!("{{\"index\": {}}}", i)))
+            .permissions(vec!["read(\"any\")".to_string()])
         })
         .collect()
 }
@@ -86,15 +88,14 @@ fn make_posts(
         .iter()
         .flat_map(|user| {
             let uid = user.id.to_string();
-            (0..posts_per_user).map(move |j| CreatePost {
-                id: Key::new(format!("r{}_post_{}_{}", round, uid, j)).unwrap(),
-                title: format!("Post {} by {}", j, uid),
-                content: Some(
-                    "production grade content for benchmarking text search capabilities"
-                        .to_string(),
-                ),
-                author: uid.clone(),
-                permissions: vec!["read(\"any\")".to_string()],
+            (0..posts_per_user).map(move |j| {
+                CreatePost::builder(format!("Post {} by {}", j, uid), uid.clone())
+                    .id(Key::new(format!("r{}_post_{}_{}", round, uid, j)).unwrap())
+                    .content(Some(
+                        "production grade content for benchmarking text search capabilities"
+                            .to_string(),
+                    ))
+                    .permissions(vec!["read(\"any\")".to_string()])
             })
         })
         .collect()

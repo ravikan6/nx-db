@@ -485,17 +485,14 @@ fn generated_models_compile_and_work_with_repository_api() {
     let database = Database::new(FakeAdapter::default(), registry);
     let repo = database.repo::<app_models::User>();
 
-    let created = block_on(repo.insert(app_models::CreateUser {
-        id: app_models::UserId::new("usr_generated").expect("valid id"),
-        name: "Ravi".into(),
-        email: Some("ravi@example.com".into()),
-        active: true,
-        permissions: vec![],
-    }))
+    let created = block_on(repo.insert(
+        app_models::CreateUser::builder("Ravi".into(), true).email(Some("ravi@example.com".into())),
+    ))
     .expect("insert should succeed");
 
-    assert_eq!(created.id.as_str(), "usr_generated");
+    assert!(created.id.as_str().len() >= nx_db::GENERATED_ID_MIN_LENGTH);
     assert_eq!(created.email.as_deref(), Some("ravi@example.com"));
+    assert!(created._metadata.permissions.is_empty());
 
     let fetched = block_on(repo.get(&created.id))
         .expect("get should succeed")
@@ -530,12 +527,12 @@ fn generated_filtered_models_apply_encode_decode_hooks() {
     let database = Database::new(adapter.clone(), registry);
     let repo = database.repo::<filtered_app_models::User>();
 
-    let created = block_on(repo.insert(filtered_app_models::CreateUser {
-        id: filtered_app_models::UserId::new("usr_filtered").expect("valid id"),
-        name: DisplayName::new("Ravi"),
-        active: true,
-        permissions: vec![],
-    }))
+    let created = block_on(
+        repo.insert(
+            filtered_app_models::CreateUser::builder(DisplayName::new("Ravi"), true)
+                .id(filtered_app_models::UserId::new("usr_filtered").expect("valid id")),
+        ),
+    )
     .expect("insert should succeed");
 
     assert_eq!(created.name.as_str(), "ravi");
@@ -612,12 +609,12 @@ fn generated_virtual_models_resolve_after_reads_and_reject_virtual_queries() {
     let database = Database::new(adapter, registry);
     let repo = database.repo::<virtual_app_models::User>();
 
-    let created = block_on(repo.insert(virtual_app_models::CreateUser {
-        id: virtual_app_models::UserId::new("usr_virtual").expect("valid id"),
-        name: "Ravi".into(),
-        active: true,
-        permissions: vec![],
-    }))
+    let created = block_on(
+        repo.insert(
+            virtual_app_models::CreateUser::builder("Ravi".into(), true)
+                .id(virtual_app_models::UserId::new("usr_virtual").expect("valid id")),
+        ),
+    )
     .expect("insert should succeed");
 
     assert_eq!(created.profile_label.as_deref(), Some("profile:ravi"));

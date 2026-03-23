@@ -6,14 +6,18 @@
       "name": "Users",
       "documentSecurity": true,
       "permissions": ["read(\"any\")", "create(\"any\")"],
-      "idMaxLength": 32,
+      "idMaxLength": 48,
       "attributes": [
         { "id": "name", "kind": "string", "required": true },
         { "id": "email", "kind": "string", "required": true },
         { "id": "metadata", "kind": "json" }
       ],
       "indexes": [
-        { "id": "users_email_unique", "kind": "unique", "attributes": ["email"] }
+        {
+          "id": "users_email_unique",
+          "kind": "unique",
+          "attributes": ["email"]
+        }
       ]
     },
     {
@@ -21,7 +25,7 @@
       "name": "Posts",
       "documentSecurity": true,
       "permissions": ["read(\"any\")", "create(\"any\")"],
-      "idMaxLength": 32,
+      "idMaxLength": 48,
       "attributes": [
         { "id": "title", "kind": "string", "required": true },
         { "id": "content", "kind": "string" },

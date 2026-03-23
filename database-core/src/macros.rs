@@ -108,6 +108,60 @@ macro_rules! db_query {
     };
 }
 
+/// Generate builder helpers for a generated `Create*` payload.
+///
+/// This keeps generated code compact while preserving required constructor
+/// arguments and chaining for optional/system fields.
+#[macro_export]
+macro_rules! impl_create_builder {
+    (
+        create: $create_name:ident,
+        id: $id_name:ident,
+        required: { $($required_field:ident : $required_ty:ty),* $(,)? },
+        optional: { $($optional_field:ident : $optional_ty:ty),* $(,)? }
+    ) => {
+        impl $create_name {
+            pub fn new($($required_field: $required_ty),*) -> Self {
+                Self {
+                    id: None,
+                    $($required_field,)*
+                    $($optional_field: Default::default(),)*
+                    permissions: Vec::new(),
+                }
+            }
+
+            pub fn builder($($required_field: $required_ty),*) -> Self {
+                Self::new($($required_field),*)
+            }
+
+            pub fn with_id(mut self, id: $id_name) -> Self {
+                self.id = Some(id);
+                self
+            }
+
+            pub fn id(self, id: $id_name) -> Self {
+                self.with_id(id)
+            }
+
+            pub fn with_permissions(mut self, permissions: Vec<String>) -> Self {
+                self.permissions = permissions;
+                self
+            }
+
+            pub fn permissions(self, permissions: Vec<String>) -> Self {
+                self.with_permissions(permissions)
+            }
+
+            $(
+                pub fn $optional_field(mut self, value: $optional_ty) -> Self {
+                    self.$optional_field = value;
+                    self
+                }
+            )*
+        }
+    };
+}
+
 /// Generate a full [`Model`] implementation for a model struct.
 ///
 /// This macro wires up the `create_to_record`, `update_to_record`, and
@@ -177,10 +231,14 @@ macro_rules! impl_model {
 
             fn create_to_record(input: Self::Create, _context: &$crate::Context) -> Result<$crate::traits::storage::StorageRecord, $crate::errors::DatabaseError> {
                 let mut record = $crate::traits::storage::StorageRecord::new();
-                $crate::insert_value(&mut record, $crate::FIELD_ID, input.id);
+                let id = match input.id {
+                    Some(value) => value,
+                    None => <Self::Id as $crate::GenerateId>::generate()?,
+                };
+                $crate::insert_value(&mut record, $crate::FIELD_ID, id);
                 $crate::insert_value(&mut record, $crate::FIELD_PERMISSIONS, input.permissions);
                 $(
-                    $crate::impl_model!(@insert_create record, $field_id, input.$field_name $(, $encoder)?);
+                    $crate::impl_model!(@insert_create record, $field_id, input.$field_name; $($required)?; $($encoder)?);
                 )*
                 Ok(record)
             }
@@ -221,11 +279,21 @@ macro_rules! impl_model {
     };
 
     // Helper for create_to_record
-    (@insert_create $record:ident, $id:expr, $val:expr) => {
+    (@insert_create $record:ident, $id:expr, $val:expr; required;) => {
         $crate::insert_value(&mut $record, $id, $val);
     };
-    (@insert_create $record:ident, $id:expr, $val:expr, $encoder:ident) => {
+    (@insert_create $record:ident, $id:expr, $val:expr; required; $encoder:ident) => {
         $crate::insert_value(&mut $record, $id, $encoder($val)?);
+    };
+    (@insert_create $record:ident, $id:expr, $val:expr;;) => {
+        if let Some(value) = $val {
+            $crate::insert_value(&mut $record, $id, value);
+        }
+    };
+    (@insert_create $record:ident, $id:expr, $val:expr;; $encoder:ident) => {
+        if let Some(value) = $val {
+            $crate::insert_value(&mut $record, $id, $encoder(value)?);
+        }
     };
 
     // Helper for update_to_record
