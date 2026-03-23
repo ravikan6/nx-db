@@ -4,8 +4,14 @@
 #[allow(dead_code)]
 #[allow(unused_imports)]
 pub mod filtered_app_models {
-    use nx_db::traits::storage::StorageRecord;
-    use nx_db::{insert_value, take_optional, take_required, get_optional, get_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, EncodedField, Field, Key, Model, Patch, QuerySpec, RelationshipKind, RelationshipSchema, RelationshipSide, StaticRegistry, FIELD_ID, FIELD_SEQUENCE, FIELD_CREATED_AT, FIELD_UPDATED_AT, FIELD_PERMISSIONS};
+    use nx_db::core::traits::storage::StorageRecord;
+    use nx_db::{
+        AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context,
+        DatabaseError, EncodedField, FIELD_CREATED_AT, FIELD_ID, FIELD_PERMISSIONS, FIELD_SEQUENCE,
+        FIELD_UPDATED_AT, Field, Key, Model, Patch, QuerySpec, RelationshipKind,
+        RelationshipSchema, RelationshipSide, StaticRegistry, get_optional, get_required,
+        insert_value, take_optional, take_required,
+    };
 
     pub type UserId = Key<32>;
 
@@ -37,7 +43,8 @@ pub mod filtered_app_models {
     pub const USER: User = User;
 
     pub const USER_ID: Field<User, UserId> = Field::new(FIELD_ID);
-    pub const USER_NAME: EncodedField<User, crate::DisplayName> = EncodedField::new("name", encode_query_user_name);
+    pub const USER_NAME: EncodedField<User, crate::DisplayName> =
+        EncodedField::new("name", encode_query_user_name);
     pub const USER_ACTIVE: Field<User, bool> = Field::new("active");
 
     fn encode_user_name(value: crate::DisplayName) -> Result<String, DatabaseError> {
@@ -45,7 +52,9 @@ pub mod filtered_app_models {
         Ok(value)
     }
 
-    fn encode_query_user_name(value: crate::DisplayName) -> Result<nx_db::traits::storage::StorageValue, DatabaseError> {
+    fn encode_query_user_name(
+        value: crate::DisplayName,
+    ) -> Result<nx_db::core::traits::storage::StorageValue, DatabaseError> {
         Ok(nx_db::IntoStorage::into_storage(encode_user_name(value)?))
     }
 
@@ -62,6 +71,7 @@ pub mod filtered_app_models {
             required: true,
             array: false,
             length: None,
+            default: None,
             persistence: AttributePersistence::Persisted,
             filters: &["displayName"],
             relationship: None,
@@ -73,24 +83,36 @@ pub mod filtered_app_models {
             required: true,
             array: false,
             length: None,
+            default: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
         },
     ];
-    const USERS_INDEXES: &[nx_db::IndexSchema] = &[
-    ];
-    pub static USERS_SCHEMA: CollectionSchema = CollectionSchema { id: "users", name: "Users", document_security: true, enabled: true, permissions: &["read(\"any\")", "create(\"any\")", "update(\"any\")", "delete(\"any\")"], attributes: USERS_ATTRIBUTES, indexes: USERS_INDEXES };
+    const USERS_INDEXES: &[nx_db::IndexSchema] = &[];
+    pub static USERS_SCHEMA: CollectionSchema = CollectionSchema {
+        id: "users",
+        name: "Users",
+        document_security: true,
+        enabled: true,
+        permissions: &[
+            "read(\"any\")",
+            "create(\"any\")",
+            "update(\"any\")",
+            "delete(\"any\")",
+        ],
+        attributes: USERS_ATTRIBUTES,
+        indexes: USERS_INDEXES,
+    };
     impl User {
         pub const ID: Field<User, UserId> = Field::new(FIELD_ID);
-        pub const NAME: EncodedField<User, crate::DisplayName> = EncodedField::new("name", encode_query_user_name);
+        pub const NAME: EncodedField<User, crate::DisplayName> =
+            EncodedField::new("name", encode_query_user_name);
         pub const ACTIVE: Field<User, bool> = Field::new("active");
     }
     nx_db::impl_model! { name: User, id: UserId, entity: UserEntity, create: CreateUser, update: UpdateUser, schema: USERS_SCHEMA, fields: {                 "name" => name : String [encode_user_name, decode_user_name] :required,                 "active" => active : bool :required } }
     pub fn registry() -> Result<StaticRegistry, DatabaseError> {
-        let registry = StaticRegistry::new()
-            .register(&USERS_SCHEMA)?
-            ;
+        let registry = StaticRegistry::new().register(&USERS_SCHEMA)?;
         Ok(registry)
     }
 }

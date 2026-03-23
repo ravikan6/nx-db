@@ -675,9 +675,18 @@ fn emit_collection(
             .unwrap();
         } else {
             writeln!(out, "        if let Some(value) = value {{").unwrap();
-            writeln!(out, "            Ok(nx_db::IntoStorage::into_storage({}(value)?))", helpers.chain.last().unwrap().encode).unwrap();
+            writeln!(
+                out,
+                "            Ok(nx_db::IntoStorage::into_storage({}(value)?))",
+                helpers.chain.last().unwrap().encode
+            )
+            .unwrap();
             writeln!(out, "        }} else {{").unwrap();
-            writeln!(out, "            Ok(nx_db::traits::storage::StorageValue::Null)").unwrap();
+            writeln!(
+                out,
+                "            Ok(nx_db::traits::storage::StorageValue::Null)"
+            )
+            .unwrap();
             writeln!(out, "        }}").unwrap();
         }
         writeln!(out, "    }}").unwrap();
@@ -735,6 +744,7 @@ fn emit_collection(
                 .unwrap_or_else(|| "None".to_string())
         )
         .unwrap();
+        writeln!(out, "            default: None,").unwrap();
         writeln!(
             out,
             "            persistence: AttributePersistence::{},",
@@ -833,18 +843,30 @@ fn emit_collection(
         writeln!(out, "        }},").unwrap();
     }
     writeln!(out, "    ];").unwrap();
-    writeln!(out, "    pub static {schema_const}: CollectionSchema = CollectionSchema {{ id: \"{}\", name: \"{}\", document_security: {}, enabled: true, permissions: &[{}], attributes: {attrs_const}, indexes: {indexes_const} }};", 
+    writeln!(out, "    pub static {schema_const}: CollectionSchema = CollectionSchema {{ id: \"{}\", name: \"{}\", document_security: {}, enabled: true, permissions: &[{}], attributes: {attrs_const}, indexes: {indexes_const} }};",
         collection.id, escape_string(&collection.name), collection.document_security,
         collection.permissions.iter().map(|p| format!("\"{}\"", escape_string(p))).collect::<Vec<_>>().join(", ")
     ).unwrap();
 
     writeln!(out, "    impl {model_name} {{").unwrap();
-    writeln!(out, "        pub const ID: Field<{model_name}, {id_name}> = Field::new(FIELD_ID);").unwrap();
+    writeln!(
+        out,
+        "        pub const ID: Field<{model_name}, {id_name}> = Field::new(FIELD_ID);"
+    )
+    .unwrap();
     for attribute in &collection.attributes {
-        if attribute.kind == AttributeKindSpec::Virtual { continue; }
+        if attribute.kind == AttributeKindSpec::Virtual {
+            continue;
+        }
         let const_name = screaming_snake(&attribute.id);
         if attribute.filters.is_empty() {
-            writeln!(out, "        pub const {const_name}: Field<{model_name}, {}> = Field::new(\"{}\");", query_field_type(attribute), attribute.id).unwrap();
+            writeln!(
+                out,
+                "        pub const {const_name}: Field<{model_name}, {}> = Field::new(\"{}\");",
+                query_field_type(attribute),
+                attribute.id
+            )
+            .unwrap();
         } else {
             let public_type = filtered_query_field_type(&filters_by_name, collection, attribute)?;
             writeln!(out, "        pub const {const_name}: EncodedField<{model_name}, {}> = EncodedField::new(\"{}\", encode_query_{}_{});",
@@ -857,22 +879,32 @@ fn emit_collection(
     let mut virtual_lines = Vec::new();
     let mut resolver_lines = Vec::new();
     for attribute in &collection.attributes {
-        if attribute.kind == AttributeKindSpec::Virtual { 
+        if attribute.kind == AttributeKindSpec::Virtual {
             let field = rust_field_name(&attribute.id);
             virtual_lines.push(field.clone());
             let resolver = resolve_attribute_resolver(&resolvers_by_name, collection, attribute)?;
             resolver_lines.push(format!("{} : {}", field, resolver.resolve));
-            continue; 
+            continue;
         }
         let field_id = &attribute.id;
         let field_name = rust_field_name(&attribute.id);
         let storage_type = query_field_type(attribute);
         let required_flag = if attribute.required { " :required" } else { "" };
-        if let Some(decoder) = attribute.filters.first().map(|_| decode_helper_name(&model_name, &attribute.id)) {
-             let encoder = encode_helper_name(&model_name, &attribute.id);
-             attribute_lines.push(format!("                \"{}\" => {} : {} [{}, {}]{}", field_id, field_name, storage_type, encoder, decoder, required_flag));
+        if let Some(decoder) = attribute
+            .filters
+            .first()
+            .map(|_| decode_helper_name(&model_name, &attribute.id))
+        {
+            let encoder = encode_helper_name(&model_name, &attribute.id);
+            attribute_lines.push(format!(
+                "                \"{}\" => {} : {} [{}, {}]{}",
+                field_id, field_name, storage_type, encoder, decoder, required_flag
+            ));
         } else {
-             attribute_lines.push(format!("                \"{}\" => {} : {}{}", field_id, field_name, storage_type, required_flag));
+            attribute_lines.push(format!(
+                "                \"{}\" => {} : {}{}",
+                field_id, field_name, storage_type, required_flag
+            ));
         }
     }
 
@@ -1244,6 +1276,7 @@ impl database_core::traits::migration::MigrationCollection for CollectionSpec {
                 required: a.required,
                 array: a.array,
                 length: a.length,
+                default: None,
                 persistence: if a.kind == AttributeKindSpec::Virtual {
                     database_core::AttributePersistence::Virtual
                 } else {
@@ -1355,7 +1388,10 @@ mod tests {
         assert!(output.contains("kind: nx_db::IndexKind::Key"));
         assert!(output.contains("orders: &[nx_db::Order::Asc]"));
         assert!(output.contains("virtuals: { profile_label }"));
-        assert!(output.contains("resolvers: { profile_label : crate::resolvers::resolve_profile_label }"));
+        assert!(
+            output
+                .contains("resolvers: { profile_label : crate::resolvers::resolve_profile_label }")
+        );
         assert!(output.contains("pub fn registry() -> Result<StaticRegistry, DatabaseError>"));
     }
 }

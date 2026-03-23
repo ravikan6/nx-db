@@ -1,13 +1,14 @@
+use crate::query::PostgresQuery;
+use crate::utils::PostgresUtils;
 use database_core::errors::DatabaseError;
 use database_core::query::QuerySpec;
 use database_core::traits::storage::{AdapterFuture, StorageAdapter, StorageRecord, StorageValue};
 use database_core::utils::PermissionEnum;
 use database_core::{
-    CollectionSchema, Context, FIELD_ID, FIELD_PERMISSIONS, FIELD_SEQUENCE, FIELD_CREATED_AT, FIELD_UPDATED_AT, AttributeKind
+    AttributeKind, CollectionSchema, Context, FIELD_CREATED_AT, FIELD_ID, FIELD_PERMISSIONS,
+    FIELD_SEQUENCE, FIELD_UPDATED_AT,
 };
 use sqlx::{Pool, Postgres, QueryBuilder, Row};
-use crate::utils::PostgresUtils;
-use crate::query::PostgresQuery;
 
 #[derive(Clone)]
 pub struct PostgresAdapter {
@@ -23,15 +24,25 @@ impl PostgresAdapter {
         PostgresUtils::quote_identifier(identifier)
     }
 
-    pub fn sql_type(kind: database_core::AttributeKind, array: bool, length: Option<usize>) -> String {
+    pub fn sql_type(
+        kind: database_core::AttributeKind,
+        array: bool,
+        length: Option<usize>,
+    ) -> String {
         PostgresUtils::sql_type(kind, array, length)
     }
 
-    pub fn qualified_table_name(context: &Context, collection: &str) -> Result<String, DatabaseError> {
+    pub fn qualified_table_name(
+        context: &Context,
+        collection: &str,
+    ) -> Result<String, DatabaseError> {
         PostgresUtils::qualified_table_name(context, collection)
     }
 
-    pub fn qualified_permissions_table_name(context: &Context, collection: &str) -> Result<String, DatabaseError> {
+    pub fn qualified_permissions_table_name(
+        context: &Context,
+        collection: &str,
+    ) -> Result<String, DatabaseError> {
         PostgresUtils::qualified_permissions_table_name(context, collection)
     }
 
@@ -43,7 +54,6 @@ impl PostgresAdapter {
         &self.pool
     }
 }
-
 
 impl StorageAdapter for PostgresAdapter {
     fn enforces_document_filtering(&self, action: PermissionEnum) -> bool {
@@ -64,37 +74,93 @@ impl StorageAdapter for PostgresAdapter {
         })
     }
 
-    fn create_collection(&self, context: &Context, schema: &'static CollectionSchema) -> AdapterFuture<'_, Result<(), DatabaseError>> {
+    fn create_collection(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+    ) -> AdapterFuture<'_, Result<(), DatabaseError>> {
         let pool = self.pool.clone();
         let context = context.clone();
         Box::pin(async move {
-            let schema_sql = format!("CREATE SCHEMA IF NOT EXISTS {}", PostgresUtils::quote_identifier(context.schema())?);
+            let schema_sql = format!(
+                "CREATE SCHEMA IF NOT EXISTS {}",
+                PostgresUtils::quote_identifier(context.schema())?
+            );
             let table = PostgresUtils::qualified_table_name(&context, schema.id)?;
             let mut cols = vec![
-                format!("{} BIGINT NOT NULL GENERATED ALWAYS AS IDENTITY", PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?),
-                format!("{} VARCHAR(255) NOT NULL", PostgresUtils::quote_identifier(database_core::COLUMN_ID)?),
-                format!("{} TIMESTAMPTZ DEFAULT NULL", PostgresUtils::quote_identifier(database_core::COLUMN_CREATED_AT)?),
-                format!("{} TIMESTAMPTZ DEFAULT NULL", PostgresUtils::quote_identifier(database_core::COLUMN_UPDATED_AT)?),
-                format!("{} TEXT[] DEFAULT '{{}}'", PostgresUtils::quote_identifier(database_core::COLUMN_PERMISSIONS)?),
+                format!(
+                    "{} BIGINT NOT NULL GENERATED ALWAYS AS IDENTITY",
+                    PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?
+                ),
+                format!(
+                    "{} VARCHAR(255) NOT NULL",
+                    PostgresUtils::quote_identifier(database_core::COLUMN_ID)?
+                ),
+                format!(
+                    "{} TIMESTAMPTZ DEFAULT NULL",
+                    PostgresUtils::quote_identifier(database_core::COLUMN_CREATED_AT)?
+                ),
+                format!(
+                    "{} TIMESTAMPTZ DEFAULT NULL",
+                    PostgresUtils::quote_identifier(database_core::COLUMN_UPDATED_AT)?
+                ),
+                format!(
+                    "{} TEXT[] DEFAULT '{{}}'",
+                    PostgresUtils::quote_identifier(database_core::COLUMN_PERMISSIONS)?
+                ),
             ];
             for attr in schema.persisted_attributes() {
                 let sql_type = PostgresUtils::sql_type(attr.kind, attr.array, attr.length);
-                cols.push(format!("{} {}{}", PostgresUtils::quote_identifier(attr.column)?, sql_type, if attr.required { " NOT NULL" } else { "" }));
+                let not_null = if attr.required { " NOT NULL" } else { "" };
+                let default_clause = PostgresUtils::sql_default(attr.default);
+                cols.push(format!(
+                    "{} {}{}{}",
+                    PostgresUtils::quote_identifier(attr.column)?,
+                    sql_type,
+                    not_null,
+                    default_clause,
+                ));
             }
-            let table_sql = format!("CREATE TABLE IF NOT EXISTS {table} ({}, PRIMARY KEY ({}))", cols.join(", "), PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?);
+            let table_sql = format!(
+                "CREATE TABLE IF NOT EXISTS {table} ({}, PRIMARY KEY ({}))",
+                cols.join(", "),
+                PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?
+            );
             let perms_table = PostgresUtils::qualified_permissions_table_name(&context, schema.id)?;
-            let perms_sql = format!("CREATE TABLE IF NOT EXISTS {perms_table} (document_id BIGINT NOT NULL, permission_type TEXT NOT NULL, permissions TEXT[] NOT NULL DEFAULT '{{}}', PRIMARY KEY (document_id, permission_type), FOREIGN KEY (document_id) REFERENCES {table}({}) ON DELETE CASCADE)", PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?);
+            let perms_sql = format!(
+                "CREATE TABLE IF NOT EXISTS {perms_table} (document_id BIGINT NOT NULL, permission_type TEXT NOT NULL, permissions TEXT[] NOT NULL DEFAULT '{{}}', PRIMARY KEY (document_id, permission_type), FOREIGN KEY (document_id) REFERENCES {table}({}) ON DELETE CASCADE)",
+                PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?
+            );
 
-            let mut tx = pool.begin().await.map_err(|e| DatabaseError::Other(e.to_string()))?;
-            sqlx::query(&schema_sql).execute(&mut *tx).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
-            sqlx::query(&table_sql).execute(&mut *tx).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
-            sqlx::query(&perms_sql).execute(&mut *tx).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
-            tx.commit().await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            sqlx::query(&schema_sql)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            sqlx::query(&table_sql)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            sqlx::query(&perms_sql)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
             Ok(())
         })
     }
 
-    fn insert(&self, context: &Context, schema: &'static CollectionSchema, values: StorageRecord) -> AdapterFuture<'_, Result<StorageRecord, DatabaseError>> {
+    fn insert(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        values: StorageRecord,
+    ) -> AdapterFuture<'_, Result<StorageRecord, DatabaseError>> {
         let _pool = self.pool.clone();
         let context = context.clone();
         Box::pin(async move {
@@ -103,28 +169,52 @@ impl StorageAdapter for PostgresAdapter {
         })
     }
 
-    fn insert_many(&self, context: &Context, schema: &'static CollectionSchema, values: Vec<StorageRecord>) -> AdapterFuture<'_, Result<Vec<StorageRecord>, DatabaseError>> {
+    fn insert_many(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        values: Vec<StorageRecord>,
+    ) -> AdapterFuture<'_, Result<Vec<StorageRecord>, DatabaseError>> {
         let pool = self.pool.clone();
         let context = context.clone();
         Box::pin(async move {
-            if values.is_empty() { return Ok(Vec::new()); }
+            if values.is_empty() {
+                return Ok(Vec::new());
+            }
             let table = PostgresUtils::qualified_table_name(&context, schema.id)?;
             let attributes: Vec<_> = schema.persisted_attributes().collect();
             let mut builder = QueryBuilder::<Postgres>::new(format!("INSERT INTO {table} ("));
             {
                 let mut sep = builder.separated(", ");
                 sep.push(PostgresUtils::quote_identifier(database_core::COLUMN_ID)?);
-                sep.push(PostgresUtils::quote_identifier(database_core::COLUMN_CREATED_AT)?);
-                sep.push(PostgresUtils::quote_identifier(database_core::COLUMN_UPDATED_AT)?);
-                sep.push(PostgresUtils::quote_identifier(database_core::COLUMN_PERMISSIONS)?);
-                for a in &attributes { sep.push(PostgresUtils::quote_identifier(a.column)?); }
+                sep.push(PostgresUtils::quote_identifier(
+                    database_core::COLUMN_CREATED_AT,
+                )?);
+                sep.push(PostgresUtils::quote_identifier(
+                    database_core::COLUMN_UPDATED_AT,
+                )?);
+                sep.push(PostgresUtils::quote_identifier(
+                    database_core::COLUMN_PERMISSIONS,
+                )?);
+                for a in &attributes {
+                    sep.push(PostgresUtils::quote_identifier(a.column)?);
+                }
             }
             builder.push(") ");
             builder.push_values(values.iter(), |mut sep, record| {
                 sep.push_bind(PostgresUtils::extract_string(record, FIELD_ID).unwrap_or_default());
-                sep.push_bind(PostgresUtils::extract_optional_timestamp(record, FIELD_CREATED_AT).unwrap_or_default());
-                sep.push_bind(PostgresUtils::extract_optional_timestamp(record, FIELD_UPDATED_AT).unwrap_or_default());
-                sep.push_bind(PostgresUtils::extract_optional_string_array(record, FIELD_PERMISSIONS).unwrap_or_default());
+                sep.push_bind(
+                    PostgresUtils::extract_optional_timestamp(record, FIELD_CREATED_AT)
+                        .unwrap_or_default(),
+                );
+                sep.push_bind(
+                    PostgresUtils::extract_optional_timestamp(record, FIELD_UPDATED_AT)
+                        .unwrap_or_default(),
+                );
+                sep.push_bind(
+                    PostgresUtils::extract_optional_string_array(record, FIELD_PERMISSIONS)
+                        .unwrap_or_default(),
+                );
                 for a in &attributes {
                     let val = record.get(a.id).unwrap_or(&StorageValue::Null);
                     PostgresQuery::push_bind_value_separated(&mut sep, val);
@@ -133,8 +223,15 @@ impl StorageAdapter for PostgresAdapter {
                     }
                 }
             });
-            builder.push(format!(" RETURNING {}", PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?));
-            let rows = builder.build().fetch_all(&pool).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+            builder.push(format!(
+                " RETURNING {}",
+                PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?
+            ));
+            let rows = builder
+                .build()
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
             let mut results = Vec::new();
             for (i, row) in rows.into_iter().enumerate() {
                 let mut record = values[i].clone();
@@ -145,78 +242,151 @@ impl StorageAdapter for PostgresAdapter {
         })
     }
 
-    fn get(&self, context: &Context, schema: &'static CollectionSchema, id: &str) -> AdapterFuture<'_, Result<Option<StorageRecord>, DatabaseError>> {
+    fn get(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        id: &str,
+    ) -> AdapterFuture<'_, Result<Option<StorageRecord>, DatabaseError>> {
         let pool = self.pool.clone();
         let context = context.clone();
         let id = id.to_string();
         Box::pin(async move {
             let table = PostgresUtils::qualified_table_name(&context, schema.id)?;
             let select = PostgresUtils::select_columns(schema)?;
-            let mut builder = QueryBuilder::<Postgres>::new(format!("SELECT {select} FROM {table} AS main "));
+            let mut builder =
+                QueryBuilder::<Postgres>::new(format!("SELECT {select} FROM {table} AS main "));
             let mut has_where = false;
             PostgresQuery::push_condition_separator(&mut builder, &mut has_where);
-            builder.push(format!("main.{} = ", PostgresUtils::quote_identifier(database_core::COLUMN_ID)?));
+            builder.push(format!(
+                "main.{} = ",
+                PostgresUtils::quote_identifier(database_core::COLUMN_ID)?
+            ));
             builder.push_bind(id);
-            PostgresQuery::push_document_action_condition(&mut builder, &context, schema, "main", PermissionEnum::Read, &mut has_where)?;
-            let row = builder.build().fetch_optional(&pool).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
-            row.map(|r| PostgresUtils::row_to_record_internal(&r, schema)).transpose()
+            PostgresQuery::push_document_action_condition(
+                &mut builder,
+                &context,
+                schema,
+                "main",
+                PermissionEnum::Read,
+                &mut has_where,
+            )?;
+            let row = builder
+                .build()
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            row.map(|r| PostgresUtils::row_to_record_internal(&r, schema))
+                .transpose()
         })
     }
 
-    fn update(&self, context: &Context, schema: &'static CollectionSchema, id: &str, values: StorageRecord) -> AdapterFuture<'_, Result<Option<StorageRecord>, DatabaseError>> {
+    fn update(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        id: &str,
+        values: StorageRecord,
+    ) -> AdapterFuture<'_, Result<Option<StorageRecord>, DatabaseError>> {
         let pool = self.pool.clone();
         let context = context.clone();
         let id = id.to_string();
         Box::pin(async move {
             let table = PostgresUtils::qualified_table_name(&context, schema.id)?;
-            let mut tx = pool.begin().await.map_err(|e| DatabaseError::Other(e.to_string()))?;
-            
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+
             let mut builder = QueryBuilder::<Postgres>::new(format!("UPDATE {table} AS main SET "));
             let mut first = true;
-            
-            let attributes: Vec<_> = schema.persisted_attributes().filter(|a| values.contains_key(a.id)).collect();
+
+            let attributes: Vec<_> = schema
+                .persisted_attributes()
+                .filter(|a| values.contains_key(a.id))
+                .collect();
             for a in &attributes {
-                if !first { builder.push(", "); }
+                if !first {
+                    builder.push(", ");
+                }
                 first = false;
                 builder.push(format!("{} = ", PostgresUtils::quote_identifier(a.column)?));
                 PostgresQuery::push_bind_value(&mut builder, values.get(a.id).unwrap());
             }
 
             if let Some(val) = values.get(database_core::FIELD_UPDATED_AT) {
-                if !first { builder.push(", "); }
+                if !first {
+                    builder.push(", ");
+                }
                 first = false;
-                builder.push(format!("{} = ", PostgresUtils::quote_identifier(database_core::COLUMN_UPDATED_AT)?));
+                builder.push(format!(
+                    "{} = ",
+                    PostgresUtils::quote_identifier(database_core::COLUMN_UPDATED_AT)?
+                ));
                 PostgresQuery::push_bind_value(&mut builder, val);
             }
 
-            let permissions = PostgresUtils::extract_optional_string_array(&values, database_core::FIELD_PERMISSIONS).unwrap_or_default();
+            let permissions = PostgresUtils::extract_optional_string_array(
+                &values,
+                database_core::FIELD_PERMISSIONS,
+            )
+            .unwrap_or_default();
             let has_perms = values.contains_key(database_core::FIELD_PERMISSIONS);
             if has_perms {
-                if !first { builder.push(", "); }
-                builder.push(format!("{} = ", PostgresUtils::quote_identifier(database_core::COLUMN_PERMISSIONS)?));
+                if !first {
+                    builder.push(", ");
+                }
+                builder.push(format!(
+                    "{} = ",
+                    PostgresUtils::quote_identifier(database_core::COLUMN_PERMISSIONS)?
+                ));
                 builder.push_bind(permissions.clone());
             }
 
             let mut has_where = false;
             PostgresQuery::push_condition_separator(&mut builder, &mut has_where);
-            builder.push(format!("main.{} = ", PostgresUtils::quote_identifier(database_core::COLUMN_ID)?));
+            builder.push(format!(
+                "main.{} = ",
+                PostgresUtils::quote_identifier(database_core::COLUMN_ID)?
+            ));
             builder.push_bind(&id);
-            PostgresQuery::push_document_action_condition(&mut builder, &context, schema, "main", PermissionEnum::Update, &mut has_where)?;
-            builder.push(format!(" RETURNING {}", PostgresUtils::select_columns(schema)?));
-            
-            let row = builder.build().fetch_optional(&mut *tx).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+            PostgresQuery::push_document_action_condition(
+                &mut builder,
+                &context,
+                schema,
+                "main",
+                PermissionEnum::Update,
+                &mut has_where,
+            )?;
+            builder.push(format!(
+                " RETURNING {}",
+                PostgresUtils::select_columns(schema)?
+            ));
+
+            let row = builder
+                .build()
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
             let record = match row {
                 Some(r) => PostgresUtils::row_to_record_internal(&r, schema)?,
                 None => return Ok(None),
             };
 
             if has_perms {
-                let seq = record.get(database_core::FIELD_SEQUENCE).unwrap().as_int().unwrap();
-                let perms_table = PostgresUtils::qualified_permissions_table_name(&context, schema.id)?;
+                let seq = record
+                    .get(database_core::FIELD_SEQUENCE)
+                    .unwrap()
+                    .as_int()
+                    .unwrap();
+                let perms_table =
+                    PostgresUtils::qualified_permissions_table_name(&context, schema.id)?;
                 sqlx::query(&format!("DELETE FROM {perms_table} WHERE document_id = $1"))
                     .bind(seq)
-                    .execute(&mut *tx).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
-                
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
+
                 let grouped_perms = database_core::utils::permission_rows(&permissions)?;
                 for (pt, pv) in grouped_perms {
                     sqlx::query(&format!("INSERT INTO {perms_table} (document_id, permission_type, permissions) VALUES ($1, $2, $3)"))
@@ -227,12 +397,20 @@ impl StorageAdapter for PostgresAdapter {
                 }
             }
 
-            tx.commit().await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+            tx.commit()
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
             Ok(Some(record))
         })
     }
 
-    fn update_many(&self, context: &Context, schema: &'static CollectionSchema, query: &QuerySpec, values: StorageRecord) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
+    fn update_many(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        query: &QuerySpec,
+        values: StorageRecord,
+    ) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
         let pool = self.pool.clone();
         let context = context.clone();
         let query = query.clone();
@@ -240,51 +418,99 @@ impl StorageAdapter for PostgresAdapter {
             let table = PostgresUtils::qualified_table_name(&context, schema.id)?;
             let mut builder = QueryBuilder::<Postgres>::new(format!("UPDATE {table} AS main SET "));
             let mut first = true;
-            
-            let attributes: Vec<_> = schema.persisted_attributes().filter(|a| values.contains_key(a.id)).collect();
+
+            let attributes: Vec<_> = schema
+                .persisted_attributes()
+                .filter(|a| values.contains_key(a.id))
+                .collect();
             for a in &attributes {
-                if !first { builder.push(", "); }
+                if !first {
+                    builder.push(", ");
+                }
                 first = false;
                 builder.push(format!("{} = ", PostgresUtils::quote_identifier(a.column)?));
                 PostgresQuery::push_bind_value(&mut builder, values.get(a.id).unwrap());
             }
 
             if let Some(val) = values.get(database_core::FIELD_UPDATED_AT) {
-                if !first { builder.push(", "); }
-                builder.push(format!("{} = ", PostgresUtils::quote_identifier(database_core::COLUMN_UPDATED_AT)?));
+                if !first {
+                    builder.push(", ");
+                }
+                builder.push(format!(
+                    "{} = ",
+                    PostgresUtils::quote_identifier(database_core::COLUMN_UPDATED_AT)?
+                ));
                 PostgresQuery::push_bind_value(&mut builder, val);
             }
 
             if values.contains_key(database_core::FIELD_PERMISSIONS) {
-                return Err(DatabaseError::Other("update_many does not support updating permissions".into()));
+                return Err(DatabaseError::Other(
+                    "update_many does not support updating permissions".into(),
+                ));
             }
 
             let mut has_where = false;
-            PostgresQuery::push_document_action_condition(&mut builder, &context, schema, "main", PermissionEnum::Update, &mut has_where)?;
+            PostgresQuery::push_document_action_condition(
+                &mut builder,
+                &context,
+                schema,
+                "main",
+                PermissionEnum::Update,
+                &mut has_where,
+            )?;
             PostgresQuery::push_filters(&mut builder, schema, &query, &mut has_where)?;
-            
-            let res = builder.build().execute(&pool).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+
+            let res = builder
+                .build()
+                .execute(&pool)
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
             Ok(res.rows_affected() as u64)
         })
     }
 
-    fn delete(&self, context: &Context, schema: &'static CollectionSchema, id: &str) -> AdapterFuture<'_, Result<bool, DatabaseError>> {
+    fn delete(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        id: &str,
+    ) -> AdapterFuture<'_, Result<bool, DatabaseError>> {
         let pool = self.pool.clone();
         let context = context.clone();
         let id = id.to_string();
         Box::pin(async move {
             let table = PostgresUtils::qualified_table_name(&context, schema.id)?;
-            let mut builder = QueryBuilder::<Postgres>::new(format!("DELETE FROM {table} AS main WHERE "));
-            builder.push(format!("main.{} = ", PostgresUtils::quote_identifier(database_core::COLUMN_ID)?));
+            let mut builder =
+                QueryBuilder::<Postgres>::new(format!("DELETE FROM {table} AS main WHERE "));
+            builder.push(format!(
+                "main.{} = ",
+                PostgresUtils::quote_identifier(database_core::COLUMN_ID)?
+            ));
             builder.push_bind(id);
             let mut has_where = true;
-            PostgresQuery::push_document_action_condition(&mut builder, &context, schema, "main", PermissionEnum::Delete, &mut has_where)?;
-            let res = builder.build().execute(&pool).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+            PostgresQuery::push_document_action_condition(
+                &mut builder,
+                &context,
+                schema,
+                "main",
+                PermissionEnum::Delete,
+                &mut has_where,
+            )?;
+            let res = builder
+                .build()
+                .execute(&pool)
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
             Ok(res.rows_affected() > 0)
         })
     }
 
-    fn delete_many(&self, context: &Context, schema: &'static CollectionSchema, query: &QuerySpec) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
+    fn delete_many(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        query: &QuerySpec,
+    ) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
         let pool = self.pool.clone();
         let context = context.clone();
         let query = query.clone();
@@ -292,46 +518,98 @@ impl StorageAdapter for PostgresAdapter {
             let table = PostgresUtils::qualified_table_name(&context, schema.id)?;
             let mut builder = QueryBuilder::<Postgres>::new(format!("DELETE FROM {table} AS main"));
             let mut has_where = false;
-            PostgresQuery::push_document_action_condition(&mut builder, &context, schema, "main", PermissionEnum::Delete, &mut has_where)?;
+            PostgresQuery::push_document_action_condition(
+                &mut builder,
+                &context,
+                schema,
+                "main",
+                PermissionEnum::Delete,
+                &mut has_where,
+            )?;
             PostgresQuery::push_filters(&mut builder, schema, &query, &mut has_where)?;
-            let res = builder.build().execute(&pool).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let res = builder
+                .build()
+                .execute(&pool)
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
             Ok(res.rows_affected() as u64)
         })
     }
 
-    fn find(&self, context: &Context, schema: &'static CollectionSchema, query: &QuerySpec) -> AdapterFuture<'_, Result<Vec<StorageRecord>, DatabaseError>> {
+    fn find(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        query: &QuerySpec,
+    ) -> AdapterFuture<'_, Result<Vec<StorageRecord>, DatabaseError>> {
         let pool = self.pool.clone();
         let context = context.clone();
         let query = query.clone();
         Box::pin(async move {
             let table = PostgresUtils::qualified_table_name(&context, schema.id)?;
             let select = PostgresUtils::select_columns(schema)?;
-            let mut builder = QueryBuilder::<Postgres>::new(format!("SELECT {select} FROM {table} AS main"));
+            let mut builder =
+                QueryBuilder::<Postgres>::new(format!("SELECT {select} FROM {table} AS main"));
             let mut has_where = false;
-            PostgresQuery::push_document_action_condition(&mut builder, &context, schema, "main", PermissionEnum::Read, &mut has_where)?;
+            PostgresQuery::push_document_action_condition(
+                &mut builder,
+                &context,
+                schema,
+                "main",
+                PermissionEnum::Read,
+                &mut has_where,
+            )?;
             PostgresQuery::push_filters(&mut builder, schema, &query, &mut has_where)?;
             PostgresQuery::push_sorts(&mut builder, schema, &query)?;
-            if let Some(l) = query.limit_value() { builder.push(" LIMIT "); builder.push_bind(l as i64); }
-            if let Some(o) = query.offset_value() { builder.push(" OFFSET "); builder.push_bind(o as i64); }
-            let rows = builder.build().fetch_all(&pool).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
-            rows.into_iter().map(|r| PostgresUtils::row_to_record_internal(&r, schema)).collect()
+            if let Some(l) = query.limit_value() {
+                builder.push(" LIMIT ");
+                builder.push_bind(l as i64);
+            }
+            if let Some(o) = query.offset_value() {
+                builder.push(" OFFSET ");
+                builder.push_bind(o as i64);
+            }
+            let rows = builder
+                .build()
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            rows.into_iter()
+                .map(|r| PostgresUtils::row_to_record_internal(&r, schema))
+                .collect()
         })
     }
 
-    fn count(&self, context: &Context, schema: &'static CollectionSchema, query: &QuerySpec) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
+    fn count(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        query: &QuerySpec,
+    ) -> AdapterFuture<'_, Result<u64, DatabaseError>> {
         let pool = self.pool.clone();
         let context = context.clone();
         let query = query.clone();
         Box::pin(async move {
             let table = PostgresUtils::qualified_table_name(&context, schema.id)?;
-            let mut builder = QueryBuilder::<Postgres>::new(format!("SELECT COUNT(*) FROM {table} AS main"));
+            let mut builder =
+                QueryBuilder::<Postgres>::new(format!("SELECT COUNT(*) FROM {table} AS main"));
             let mut has_where = false;
-            PostgresQuery::push_document_action_condition(&mut builder, &context, schema, "main", PermissionEnum::Read, &mut has_where)?;
+            PostgresQuery::push_document_action_condition(
+                &mut builder,
+                &context,
+                schema,
+                "main",
+                PermissionEnum::Read,
+                &mut has_where,
+            )?;
             PostgresQuery::push_filters(&mut builder, schema, &query, &mut has_where)?;
-            let row = builder.build().fetch_one(&pool).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let row = builder
+                .build()
+                .fetch_one(&pool)
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
             let count: i64 = row.get(0);
             Ok(count as u64)
         })
     }
-
 }

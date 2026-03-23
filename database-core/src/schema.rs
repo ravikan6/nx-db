@@ -2,7 +2,49 @@ use crate::enums::{
     AttributeKind, IndexKind, OnDeleteAction, Order, RelationshipKind, RelationshipSide,
 };
 use crate::errors::DatabaseError;
+use crate::traits::storage::StorageValue;
 use std::collections::BTreeSet;
+
+/// A compile-time default value for an attribute that is applied on insert
+/// when no value is provided.
+///
+/// The enum is intentionally `Copy + Eq` so it can live inside `const` items.
+/// Floats are stored as IEEE-754 raw bits (`u64`) to satisfy `Eq`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefaultValue {
+    /// Explicit SQL NULL.
+    Null,
+    /// Boolean default.
+    Bool(bool),
+    /// 64-bit integer default.
+    Int(i64),
+    /// 64-bit float stored as raw IEEE-754 bits.  Use [`DefaultValue::float`]
+    /// to construct this variant from an `f64`.
+    Float(u64),
+    /// Static string default.
+    Str(&'static str),
+    /// Insert the current UTC timestamp at write time.
+    Now,
+}
+
+impl DefaultValue {
+    /// Construct a float default from an `f64`.
+    pub const fn float(v: f64) -> Self {
+        Self::Float(v.to_bits())
+    }
+
+    /// Convert this default into a [`StorageValue`] suitable for insertion.
+    pub fn into_storage(self) -> StorageValue {
+        match self {
+            Self::Null => StorageValue::Null,
+            Self::Bool(b) => StorageValue::Bool(b),
+            Self::Int(i) => StorageValue::Int(i),
+            Self::Float(bits) => StorageValue::Float(f64::from_bits(bits)),
+            Self::Str(s) => StorageValue::String(s.to_string()),
+            Self::Now => StorageValue::Timestamp(time::OffsetDateTime::now_utc()),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CollectionSchema {
@@ -16,16 +58,19 @@ pub struct CollectionSchema {
 }
 
 impl CollectionSchema {
+    /// Find an attribute by its logical id.
     pub fn attribute(&self, id: &str) -> Option<&AttributeSchema> {
-        self.attributes.iter().find(|attribute| attribute.id == id)
+        self.attributes.iter().find(|a| a.id == id)
     }
 
+    /// Iterate over attributes that are persisted to storage.
     pub fn persisted_attributes(&self) -> impl Iterator<Item = &AttributeSchema> {
         self.attributes
             .iter()
-            .filter(|attribute| attribute.persistence == AttributePersistence::Persisted)
+            .filter(|a| a.persistence == AttributePersistence::Persisted)
     }
 
+    /// Validate the schema for logical consistency.
     pub fn validate(&self) -> Result<(), DatabaseError> {
         if self.id.is_empty() {
             return Err(DatabaseError::Other("collection id cannot be empty".into()));
@@ -125,16 +170,28 @@ impl CollectionSchema {
     }
 }
 
+/// Schema description for a single attribute/column.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AttributeSchema {
+    /// Logical attribute id used in queries and records.
     pub id: &'static str,
+    /// Physical column name in the backing store.
     pub column: &'static str,
+    /// Value kind for this attribute.
     pub kind: AttributeKind,
+    /// Whether the attribute must be provided on insert.
     pub required: bool,
+    /// Whether the attribute holds an array of values.
     pub array: bool,
+    /// Optional maximum length for string attributes.
     pub length: Option<usize>,
+    /// Optional default value applied on insert when no value is given.
+    pub default: Option<DefaultValue>,
+    /// Whether this attribute is stored or computed.
     pub persistence: AttributePersistence,
+    /// Named filter codecs that apply to this attribute.
     pub filters: &'static [&'static str],
+    /// Relationship metadata, set when `kind == AttributeKind::Relationship`.
     pub relationship: Option<RelationshipSchema>,
 }
 
@@ -166,17 +223,23 @@ impl crate::traits::migration::MigrationCollection for &'static CollectionSchema
     fn id(&self) -> &str {
         self.id
     }
+
     fn attributes(&self) -> Vec<crate::traits::migration::MigrationAttribute> {
-        self.attributes.iter().map(|a| crate::traits::migration::MigrationAttribute {
-            id: a.id.to_string(),
-            column: a.column.to_string(),
-            kind: a.kind,
-            required: a.required,
-            array: a.array,
-            length: a.length,
-            persistence: a.persistence,
-        }).collect()
+        self.attributes
+            .iter()
+            .map(|a| crate::traits::migration::MigrationAttribute {
+                id: a.id.to_string(),
+                column: a.column.to_string(),
+                kind: a.kind,
+                required: a.required,
+                array: a.array,
+                length: a.length,
+                default: a.default,
+                persistence: a.persistence,
+            })
+            .collect()
     }
+
     fn indexes(&self) -> Vec<crate::traits::migration::MigrationIndex> {
         self.indexes
             .iter()
@@ -193,7 +256,8 @@ impl crate::traits::migration::MigrationCollection for &'static CollectionSchema
 #[cfg(test)]
 mod tests {
     use super::{
-        AttributePersistence, AttributeSchema, CollectionSchema, IndexSchema, RelationshipSchema,
+        AttributePersistence, AttributeSchema, CollectionSchema, DefaultValue, IndexSchema,
+        RelationshipSchema,
     };
     use crate::enums::{
         AttributeKind, IndexKind, OnDeleteAction, Order, RelationshipKind, RelationshipSide,
@@ -207,6 +271,19 @@ mod tests {
             required: true,
             array: false,
             length: None,
+            default: None,
+            persistence: AttributePersistence::Persisted,
+            filters: &[],
+            relationship: None,
+        },
+        AttributeSchema {
+            id: "score",
+            column: "score",
+            kind: AttributeKind::Integer,
+            required: false,
+            array: false,
+            length: None,
+            default: Some(DefaultValue::Int(0)),
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
@@ -218,6 +295,7 @@ mod tests {
             required: false,
             array: false,
             length: None,
+            default: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: Some(RelationshipSchema {
@@ -251,5 +329,15 @@ mod tests {
     #[test]
     fn validates_schema() {
         assert!(COLLECTION.validate().is_ok());
+    }
+
+    #[test]
+    fn default_value_float_roundtrip() {
+        let d = DefaultValue::float(3.14);
+        if let super::StorageValue::Float(v) = d.into_storage() {
+            assert!((v - 3.14).abs() < 1e-10);
+        } else {
+            panic!("expected Float storage value");
+        }
     }
 }

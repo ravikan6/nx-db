@@ -1,3 +1,4 @@
+/// Combine multiple [`Filter`]s with logical AND.
 #[macro_export]
 macro_rules! and {
     ($($filter:expr),* $(,)?) => {
@@ -5,6 +6,7 @@ macro_rules! and {
     };
 }
 
+/// Combine multiple [`Filter`]s with logical OR.
 #[macro_export]
 macro_rules! or {
     ($($filter:expr),* $(,)?) => {
@@ -12,6 +14,7 @@ macro_rules! or {
     };
 }
 
+/// Negate a [`Filter`].
 #[macro_export]
 macro_rules! not {
     ($filter:expr) => {
@@ -19,6 +22,11 @@ macro_rules! not {
     };
 }
 
+/// Build a [`Context`] with common options.
+///
+/// ```rust,ignore
+/// let ctx = db_context!(schema: "myapp", role: Role::any());
+/// ```
 #[macro_export]
 macro_rules! db_context {
     (schema: $schema:expr) => {
@@ -37,6 +45,11 @@ macro_rules! db_context {
     };
 }
 
+/// Build a [`StaticRegistry`] from a list of collection schema references.
+///
+/// ```rust,ignore
+/// let registry = db_registry!(&USERS_SCHEMA, &POSTS_SCHEMA);
+/// ```
 #[macro_export]
 macro_rules! db_registry {
     ($($schema:expr),* $(,)?) => {
@@ -50,6 +63,11 @@ macro_rules! db_registry {
     };
 }
 
+/// Build a [`QuerySpec`] using named keyword arguments.
+///
+/// ```rust,ignore
+/// let q = db_query!(filter: User::NAME.eq("Ravi"), limit: 10);
+/// ```
 #[macro_export]
 macro_rules! db_query {
     () => {
@@ -90,33 +108,30 @@ macro_rules! db_query {
     };
 }
 
-#[macro_export]
-macro_rules! db_insert {
-    ($model:ty { $($field:ident : $val:expr),* $(,)? }) => {
-        {
-            use $crate::Model;
-            type Create = <$model as Model>::Create;
-            Create {
-                $($field: $val,)*
-            }
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! db_update {
-    ($model:ty { $($field:ident : $val:expr),* $(,)? }) => {
-        {
-            use $crate::{Model, Patch};
-            type Update = <$model as Model>::Update;
-            Update {
-                $($field: Patch::Set($val),)*
-                ..Default::default()
-            }
-        }
-    };
-}
-
+/// Generate a full [`Model`] implementation for a model struct.
+///
+/// This macro wires up the `create_to_record`, `update_to_record`, and
+/// `entity_from_record` methods, optionally with custom encoder/decoder
+/// functions per field, virtual (computed) fields, and async resolvers.
+///
+/// # Syntax
+/// ```rust,ignore
+/// impl_model! {
+///     name: MyModel,
+///     id: MyId,
+///     entity: MyEntity,
+///     create: CreateMy,
+///     update: UpdateMy,
+///     schema: MY_SCHEMA,
+///     fields: {
+///         "col_id" => field_name : FieldType,
+///         "encoded_col" => encoded_field : StoredType [encode_fn, decode_fn] :required,
+///     }
+///     // optional:
+///     , virtuals: { computed_field }
+///     , resolvers: { computed_field : resolve_computed_field }
+/// }
+/// ```
 #[macro_export]
 macro_rules! impl_model {
     (
@@ -180,7 +195,7 @@ macro_rules! impl_model {
                 Ok(record)
             }
 
-            fn entity_from_record(mut record: $crate::traits::storage::StorageRecord, _context: &$crate::Context) -> Result<Self::Entity, $crate::errors::DatabaseError> {
+            fn entity_from_record(record: $crate::traits::storage::StorageRecord, _context: &$crate::Context) -> Result<Self::Entity, $crate::errors::DatabaseError> {
                 Ok($entity_name {
                     _metadata: $crate::Metadata {
                         sequence: $crate::get_required(&record, $crate::FIELD_SEQUENCE)?,

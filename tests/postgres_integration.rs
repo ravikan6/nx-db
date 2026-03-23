@@ -28,6 +28,7 @@ const RESTRICTED_ATTRIBUTES: &[AttributeSchema] = &[AttributeSchema {
     filters: &[],
     relationship: None,
     length: None,
+    default: None,
 }];
 
 static RESTRICTED_USERS_SCHEMA: CollectionSchema = CollectionSchema {

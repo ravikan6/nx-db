@@ -5,7 +5,13 @@
 #[allow(unused_imports)]
 pub mod prod_models {
     use nx_db::traits::storage::StorageRecord;
-    use nx_db::{insert_value, take_optional, take_required, get_optional, get_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, Field, Key, Model, Patch, QuerySpec, RelationshipKind, RelationshipSchema, RelationshipSide, StaticRegistry, FIELD_ID, FIELD_SEQUENCE, FIELD_CREATED_AT, FIELD_UPDATED_AT, FIELD_PERMISSIONS};
+    use nx_db::{
+        AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context,
+        DatabaseError, FIELD_CREATED_AT, FIELD_ID, FIELD_PERMISSIONS, FIELD_SEQUENCE,
+        FIELD_UPDATED_AT, Field, Key, Model, Patch, QuerySpec, RelationshipKind,
+        RelationshipSchema, RelationshipSide, StaticRegistry, get_optional, get_required,
+        insert_value, take_optional, take_required,
+    };
 
     pub type UserId = Key<32>;
 
@@ -52,6 +58,7 @@ pub mod prod_models {
             required: true,
             array: false,
             length: None,
+            default: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
@@ -63,6 +70,7 @@ pub mod prod_models {
             required: true,
             array: false,
             length: None,
+            default: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
@@ -74,20 +82,27 @@ pub mod prod_models {
             required: false,
             array: false,
             length: None,
+            default: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
         },
     ];
-    const USERS_INDEXES: &[nx_db::IndexSchema] = &[
-        nx_db::IndexSchema {
-            id: "users_email_unique",
-            kind: nx_db::IndexKind::Unique,
-            attributes: &["email"],
-            orders: &[],
-        },
-    ];
-    pub static USERS_SCHEMA: CollectionSchema = CollectionSchema { id: "users", name: "Users", document_security: true, enabled: true, permissions: &["read(\"any\")", "create(\"any\")"], attributes: USERS_ATTRIBUTES, indexes: USERS_INDEXES };
+    const USERS_INDEXES: &[nx_db::IndexSchema] = &[nx_db::IndexSchema {
+        id: "users_email_unique",
+        kind: nx_db::IndexKind::Unique,
+        attributes: &["email"],
+        orders: &[],
+    }];
+    pub static USERS_SCHEMA: CollectionSchema = CollectionSchema {
+        id: "users",
+        name: "Users",
+        document_security: true,
+        enabled: true,
+        permissions: &["read(\"any\")", "create(\"any\")"],
+        attributes: USERS_ATTRIBUTES,
+        indexes: USERS_INDEXES,
+    };
     impl User {
         pub const ID: Field<User, UserId> = Field::new(FIELD_ID);
         pub const NAME: Field<User, String> = Field::new("name");
@@ -140,6 +155,7 @@ pub mod prod_models {
             required: true,
             array: false,
             length: None,
+            default: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
@@ -151,6 +167,7 @@ pub mod prod_models {
             required: false,
             array: false,
             length: None,
+            default: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
@@ -162,6 +179,7 @@ pub mod prod_models {
             required: true,
             array: false,
             length: None,
+            default: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: Some(nx_db::RelationshipSchema {
@@ -174,15 +192,21 @@ pub mod prod_models {
             }),
         },
     ];
-    const POSTS_INDEXES: &[nx_db::IndexSchema] = &[
-        nx_db::IndexSchema {
-            id: "full_text_content",
-            kind: nx_db::IndexKind::FullText,
-            attributes: &["content"],
-            orders: &[],
-        },
-    ];
-    pub static POSTS_SCHEMA: CollectionSchema = CollectionSchema { id: "posts", name: "Posts", document_security: true, enabled: true, permissions: &["read(\"any\")", "create(\"any\")"], attributes: POSTS_ATTRIBUTES, indexes: POSTS_INDEXES };
+    const POSTS_INDEXES: &[nx_db::IndexSchema] = &[nx_db::IndexSchema {
+        id: "full_text_content",
+        kind: nx_db::IndexKind::FullText,
+        attributes: &["content"],
+        orders: &[],
+    }];
+    pub static POSTS_SCHEMA: CollectionSchema = CollectionSchema {
+        id: "posts",
+        name: "Posts",
+        document_security: true,
+        enabled: true,
+        permissions: &["read(\"any\")", "create(\"any\")"],
+        attributes: POSTS_ATTRIBUTES,
+        indexes: POSTS_INDEXES,
+    };
     impl Post {
         pub const ID: Field<Post, PostId> = Field::new(FIELD_ID);
         pub const TITLE: Field<Post, String> = Field::new("title");
@@ -193,8 +217,7 @@ pub mod prod_models {
     pub fn registry() -> Result<StaticRegistry, DatabaseError> {
         let registry = StaticRegistry::new()
             .register(&USERS_SCHEMA)?
-            .register(&POSTS_SCHEMA)?
-            ;
+            .register(&POSTS_SCHEMA)?;
         Ok(registry)
     }
 }

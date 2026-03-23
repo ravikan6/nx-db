@@ -93,6 +93,7 @@ mod tests {
         required: true,
         array: false,
         length: None,
+        default: None,
         persistence: AttributePersistence::Persisted,
         filters: &[],
         relationship: None,

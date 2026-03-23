@@ -106,20 +106,6 @@ impl<A, R> Database<A, R, NoopEventBus> {
 }
 
 impl<A, R, E> Database<A, R, E> {
-    pub fn with_events(adapter: A, registry: R, events: E) -> Self {
-        Self {
-            adapter,
-            registry,
-            events,
-            cache: None,
-        }
-    }
-
-    pub fn with_cache_backend(mut self, cache: Arc<dyn CacheBackend>) -> Self {
-        self.cache = Some(cache);
-        self
-    }
-
     pub fn adapter(&self) -> &A {
         &self.adapter
     }
@@ -151,7 +137,8 @@ impl<A, R, E> Database<A, R, E> {
     where
         M: Model,
     {
-        self.scope(Context::default()).get_repo(model)
+        let _ = model;
+        self.scope(Context::default()).repo::<M>()
     }
 }
 
@@ -176,12 +163,8 @@ where
         collection: &'static CollectionSchema,
         record: &StorageRecord,
     ) -> Result<(), DatabaseError> {
-        self.validate_record_fields(collection, record).map_err(|e| {
-            e
-        })?;
-        self.validate_required_attributes(collection, record).map_err(|e| {
-            e
-        })
+        self.validate_record_fields(collection, record)?;
+        self.validate_required_attributes(collection, record)
     }
 
     pub fn validate_partial_record(
@@ -791,16 +774,25 @@ where
     where
         M: Model,
     {
+        let now = time::OffsetDateTime::now_utc();
+
         if !partial {
-            let now = time::OffsetDateTime::now_utc();
             record
                 .entry(crate::system_fields::FIELD_CREATED_AT.to_string())
                 .or_insert(StorageValue::Timestamp(now));
             record
                 .entry(crate::system_fields::FIELD_UPDATED_AT.to_string())
                 .or_insert(StorageValue::Timestamp(now));
+
+            // Apply attribute defaults for missing fields on insert.
+            for attribute in collection.persisted_attributes() {
+                if let Some(default) = attribute.default {
+                    record
+                        .entry(attribute.id.to_string())
+                        .or_insert_with(|| default.into_storage());
+                }
+            }
         } else {
-            let now = time::OffsetDateTime::now_utc();
             record
                 .entry(crate::system_fields::FIELD_UPDATED_AT.to_string())
                 .or_insert(StorageValue::Timestamp(now));
@@ -968,12 +960,18 @@ where
     }
 
     fn cache_key_component(value: &str) -> String {
-        let mut encoded = String::with_capacity(value.len() * 2 + 1);
-        encoded.push('h');
-        for byte in value.bytes() {
-            encoded.push_str(&format!("{byte:02x}"));
+        // Hex-encode the raw bytes with a leading 'h' sentinel so the resulting
+        // string is safe for any cache key character set.
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let bytes = value.as_bytes();
+        let mut encoded = Vec::with_capacity(1 + bytes.len() * 2);
+        encoded.push(b'h');
+        for &byte in bytes {
+            encoded.push(HEX[(byte >> 4) as usize]);
+            encoded.push(HEX[(byte & 0xf) as usize]);
         }
-        encoded
+        // SAFETY: only ASCII bytes were pushed.
+        unsafe { String::from_utf8_unchecked(encoded) }
     }
 
     async fn read_cache(
@@ -1125,6 +1123,7 @@ mod tests {
         required: true,
         array: false,
         length: None,
+        default: None,
         persistence: AttributePersistence::Persisted,
         filters: &[],
         relationship: None,
@@ -1732,7 +1731,7 @@ mod tests {
             .register(&USERS)
             .expect("registry should accept collection");
         let events = RecordingEvents::default();
-        let database = Database::with_events(FakeAdapter::default(), registry, events.clone());
+        let database = Database::builder().with_adapter(FakeAdapter::default()).with_registry(registry).with_events(events.clone()).build().expect("database should build");
 
         block_on(database.create_collection("users")).expect("collection should be created");
 
@@ -1748,7 +1747,7 @@ mod tests {
             .expect("registry should accept collection");
         let database = Database::new(FakeAdapter::default(), registry);
         let context = crate::Context::default().with_schema("tenant_alpha");
-        let repo = database.scope(context.clone()).get_repo(USER);
+        let repo = database.scope(context.clone()).repo::<User>();
 
         let created = block_on(repo.insert(CreateUser {
             id: Key::<32>::new("usr_1").expect("valid id"),
@@ -1861,7 +1860,7 @@ mod tests {
             .register(&USERS)
             .expect("registry should accept collection");
         let events = RecordingEvents::default();
-        let database = Database::with_events(adapter, registry, events.clone());
+        let database = Database::builder().with_adapter(adapter).with_registry(registry).with_events(events.clone()).build().expect("database should build");
         let repo = database.repo::<EncodedUser>();
 
         let created = block_on(repo.insert(CreateUser {
@@ -1985,7 +1984,7 @@ mod tests {
             .register(&USERS)
             .expect("registry should accept collection");
         let events = RecordingEvents::default();
-        let database = Database::with_events(adapter, registry, events.clone());
+        let database = Database::builder().with_adapter(adapter).with_registry(registry).with_events(events.clone()).build().expect("database should build");
         let repo = database.repo::<EncodedUser>();
 
         let created = block_on(repo.insert(CreateUser {
@@ -2036,7 +2035,7 @@ mod tests {
             .register(&USERS)
             .expect("registry should accept collection");
         let events = RecordingEvents::default();
-        let database = Database::with_events(FakeAdapter::default(), registry, events.clone());
+        let database = Database::builder().with_adapter(FakeAdapter::default()).with_registry(registry).with_events(events.clone()).build().expect("database should build");
         let repo = database.repo::<User>();
 
         let created = block_on(repo.insert(CreateUser {
@@ -2540,12 +2539,8 @@ mod tests {
                     FilterOp::IsNotNull => !matches!(value, None | Some(StorageValue::Null)),
                 }
             }
-            crate::query::Filter::And(filters) => {
-                filters.iter().all(|f| matches_filter(record, f))
-            }
-            crate::query::Filter::Or(filters) => {
-                filters.iter().any(|f| matches_filter(record, f))
-            }
+            crate::query::Filter::And(filters) => filters.iter().all(|f| matches_filter(record, f)),
+            crate::query::Filter::Or(filters) => filters.iter().any(|f| matches_filter(record, f)),
             crate::query::Filter::Not(filter) => !matches_filter(record, filter),
         }
     }

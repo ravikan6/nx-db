@@ -1,6 +1,6 @@
-use nx_db::query::{Filter, FilterOp};
-use nx_db::traits::storage::{AdapterFuture, StorageAdapter, StorageRecord, StorageValue};
+use nx_db::core::traits::storage::{AdapterFuture, StorageAdapter, StorageRecord, StorageValue};
 use nx_db::{Context, Database, DatabaseError, Field, QuerySpec};
+use nx_db::{Filter, FilterOp};
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -33,7 +33,9 @@ impl nx_db::FromStorage for DisplayName {
     fn from_storage(value: StorageValue) -> Result<Self, DatabaseError> {
         match value {
             StorageValue::String(s) => Ok(DisplayName(s)),
-            _ => Err(DatabaseError::Other("expected string for DisplayName".into())),
+            _ => Err(DatabaseError::Other(
+                "expected string for DisplayName".into(),
+            )),
         }
     }
 }
@@ -109,10 +111,22 @@ impl StorageAdapter for FakeAdapter {
             },
         );
 
-        values.entry(nx_db::FIELD_SEQUENCE.to_string()).or_insert(StorageValue::Int(1));
-        values.entry(nx_db::FIELD_CREATED_AT.to_string()).or_insert_with(|| StorageValue::Timestamp(sqlx::types::time::OffsetDateTime::now_utc()));
-        values.entry(nx_db::FIELD_UPDATED_AT.to_string()).or_insert_with(|| StorageValue::Timestamp(sqlx::types::time::OffsetDateTime::now_utc()));
-        values.entry(nx_db::FIELD_PERMISSIONS.to_string()).or_insert(StorageValue::StringArray(vec![]));
+        values
+            .entry(nx_db::FIELD_SEQUENCE.to_string())
+            .or_insert(StorageValue::Int(1));
+        values
+            .entry(nx_db::FIELD_CREATED_AT.to_string())
+            .or_insert_with(|| {
+                StorageValue::Timestamp(sqlx::types::time::OffsetDateTime::now_utc())
+            });
+        values
+            .entry(nx_db::FIELD_UPDATED_AT.to_string())
+            .or_insert_with(|| {
+                StorageValue::Timestamp(sqlx::types::time::OffsetDateTime::now_utc())
+            });
+        values
+            .entry(nx_db::FIELD_PERMISSIONS.to_string())
+            .or_insert(StorageValue::StringArray(vec![]));
 
         Box::pin(async move {
             rows.lock().expect("rows lock").insert(key, values.clone());
@@ -138,10 +152,22 @@ impl StorageAdapter for FakeAdapter {
                     Some(StorageValue::String(value)) => value.clone(),
                     _ => return Err(DatabaseError::Other("missing id".into())),
                 };
-                record.entry(nx_db::FIELD_SEQUENCE.to_string()).or_insert(StorageValue::Int(1));
-                record.entry(nx_db::FIELD_CREATED_AT.to_string()).or_insert_with(|| StorageValue::Timestamp(sqlx::types::time::OffsetDateTime::now_utc()));
-                record.entry(nx_db::FIELD_UPDATED_AT.to_string()).or_insert_with(|| StorageValue::Timestamp(sqlx::types::time::OffsetDateTime::now_utc()));
-                record.entry(nx_db::FIELD_PERMISSIONS.to_string()).or_insert(StorageValue::StringArray(vec![]));
+                record
+                    .entry(nx_db::FIELD_SEQUENCE.to_string())
+                    .or_insert(StorageValue::Int(1));
+                record
+                    .entry(nx_db::FIELD_CREATED_AT.to_string())
+                    .or_insert_with(|| {
+                        StorageValue::Timestamp(sqlx::types::time::OffsetDateTime::now_utc())
+                    });
+                record
+                    .entry(nx_db::FIELD_UPDATED_AT.to_string())
+                    .or_insert_with(|| {
+                        StorageValue::Timestamp(sqlx::types::time::OffsetDateTime::now_utc())
+                    });
+                record
+                    .entry(nx_db::FIELD_PERMISSIONS.to_string())
+                    .or_insert(StorageValue::StringArray(vec![]));
 
                 locked.insert(
                     (schema_name.clone(), collection.clone(), id),

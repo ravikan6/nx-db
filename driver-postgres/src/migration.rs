@@ -15,6 +15,7 @@ pub enum MigrationChange {
         column: String,
         sql_type: String,
         required: bool,
+        default: Option<database_core::schema::DefaultValue>,
     },
     CreateIndex {
         table: String,
@@ -108,6 +109,7 @@ impl<'a> MigrationEngine<'a> {
                     column: attr.column.to_string(),
                     sql_type: PostgresAdapter::sql_type(attr.kind, attr.array, attr.length),
                     required: attr.required,
+                    default: attr.default,
                 });
             }
         }
@@ -195,13 +197,15 @@ impl<'a> MigrationEngine<'a> {
                 column,
                 sql_type,
                 required,
+                default,
             } => {
                 let table_name = PostgresAdapter::qualified_table_name(context, &table)?;
                 let column_name = PostgresAdapter::quote_identifier(&column)?;
-                let nullable = if required { "NOT NULL" } else { "" };
+                let not_null = if required { " NOT NULL" } else { "" };
+                let default_clause = crate::utils::PostgresUtils::sql_default(default);
                 let sql = format!(
-                    "ALTER TABLE {} ADD COLUMN {} {} {}",
-                    table_name, column_name, sql_type, nullable
+                    "ALTER TABLE {} ADD COLUMN {}{}{}{}",
+                    table_name, column_name, sql_type, not_null, default_clause
                 );
 
                 println!("Executing: {}", sql);

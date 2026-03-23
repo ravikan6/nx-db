@@ -4,8 +4,14 @@
 #[allow(dead_code)]
 #[allow(unused_imports)]
 pub mod app_models {
-    use nx_db::traits::storage::StorageRecord;
-    use nx_db::{insert_value, take_optional, take_required, get_optional, get_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, Field, Key, Model, Patch, QuerySpec, RelationshipKind, RelationshipSchema, RelationshipSide, StaticRegistry, FIELD_ID, FIELD_SEQUENCE, FIELD_CREATED_AT, FIELD_UPDATED_AT, FIELD_PERMISSIONS};
+    use nx_db::core::traits::storage::StorageRecord;
+    use nx_db::{
+        AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context,
+        DatabaseError, FIELD_CREATED_AT, FIELD_ID, FIELD_PERMISSIONS, FIELD_SEQUENCE,
+        FIELD_UPDATED_AT, Field, Key, Model, Patch, QuerySpec, RelationshipKind,
+        RelationshipSchema, RelationshipSide, StaticRegistry, get_optional, get_required,
+        insert_value, take_optional, take_required,
+    };
 
     pub type UserId = Key<32>;
 
@@ -52,6 +58,7 @@ pub mod app_models {
             required: true,
             array: false,
             length: None,
+            default: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
@@ -63,6 +70,7 @@ pub mod app_models {
             required: false,
             array: false,
             length: None,
+            default: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
@@ -74,6 +82,7 @@ pub mod app_models {
             required: true,
             array: false,
             length: None,
+            default: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
@@ -93,7 +102,20 @@ pub mod app_models {
             orders: &[nx_db::Order::Asc, nx_db::Order::Desc],
         },
     ];
-    pub static USERS_SCHEMA: CollectionSchema = CollectionSchema { id: "users", name: "Users", document_security: true, enabled: true, permissions: &["read(\"any\")", "create(\"any\")", "update(\"any\")", "delete(\"any\")"], attributes: USERS_ATTRIBUTES, indexes: USERS_INDEXES };
+    pub static USERS_SCHEMA: CollectionSchema = CollectionSchema {
+        id: "users",
+        name: "Users",
+        document_security: true,
+        enabled: true,
+        permissions: &[
+            "read(\"any\")",
+            "create(\"any\")",
+            "update(\"any\")",
+            "delete(\"any\")",
+        ],
+        attributes: USERS_ATTRIBUTES,
+        indexes: USERS_INDEXES,
+    };
     impl User {
         pub const ID: Field<User, UserId> = Field::new(FIELD_ID);
         pub const NAME: Field<User, String> = Field::new("name");
@@ -146,6 +168,7 @@ pub mod app_models {
             required: true,
             array: false,
             length: None,
+            default: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
@@ -157,6 +180,7 @@ pub mod app_models {
             required: true,
             array: false,
             length: None,
+            default: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
@@ -168,20 +192,32 @@ pub mod app_models {
             required: true,
             array: false,
             length: None,
+            default: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
             relationship: None,
         },
     ];
-    const SESSIONS_INDEXES: &[nx_db::IndexSchema] = &[
-        nx_db::IndexSchema {
-            id: "sessions_user_token_idx",
-            kind: nx_db::IndexKind::Key,
-            attributes: &["userId", "token"],
-            orders: &[nx_db::Order::Asc, nx_db::Order::Asc],
-        },
-    ];
-    pub static SESSIONS_SCHEMA: CollectionSchema = CollectionSchema { id: "sessions", name: "Sessions", document_security: true, enabled: true, permissions: &["read(\"users\")", "create(\"users\")", "update(\"users\")", "delete(\"users\")"], attributes: SESSIONS_ATTRIBUTES, indexes: SESSIONS_INDEXES };
+    const SESSIONS_INDEXES: &[nx_db::IndexSchema] = &[nx_db::IndexSchema {
+        id: "sessions_user_token_idx",
+        kind: nx_db::IndexKind::Key,
+        attributes: &["userId", "token"],
+        orders: &[nx_db::Order::Asc, nx_db::Order::Asc],
+    }];
+    pub static SESSIONS_SCHEMA: CollectionSchema = CollectionSchema {
+        id: "sessions",
+        name: "Sessions",
+        document_security: true,
+        enabled: true,
+        permissions: &[
+            "read(\"users\")",
+            "create(\"users\")",
+            "update(\"users\")",
+            "delete(\"users\")",
+        ],
+        attributes: SESSIONS_ATTRIBUTES,
+        indexes: SESSIONS_INDEXES,
+    };
     impl Session {
         pub const ID: Field<Session, SessionId> = Field::new(FIELD_ID);
         pub const USER_ID: Field<Session, String> = Field::new("userId");
@@ -192,8 +228,7 @@ pub mod app_models {
     pub fn registry() -> Result<StaticRegistry, DatabaseError> {
         let registry = StaticRegistry::new()
             .register(&USERS_SCHEMA)?
-            .register(&SESSIONS_SCHEMA)?
-            ;
+            .register(&SESSIONS_SCHEMA)?;
         Ok(registry)
     }
 }

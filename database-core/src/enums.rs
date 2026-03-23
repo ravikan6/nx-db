@@ -1,16 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum Value {
-    Null,
-    Bool(bool),
-    Int(i64),
-    Float(f64),
-    String(String),
-    Array(Vec<Value>),
-    Object(HashMap<String, Value>),
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

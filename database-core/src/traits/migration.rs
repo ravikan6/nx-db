@@ -1,5 +1,5 @@
 use crate::enums::{AttributeKind, IndexKind, Order};
-use crate::schema::AttributePersistence;
+use crate::schema::{AttributePersistence, DefaultValue};
 
 pub trait MigrationCollection {
     fn id(&self) -> &str;
@@ -14,6 +14,7 @@ pub struct MigrationAttribute {
     pub required: bool,
     pub array: bool,
     pub length: Option<usize>,
+    pub default: Option<DefaultValue>,
     pub persistence: AttributePersistence,
 }
 
