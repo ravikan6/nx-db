@@ -93,6 +93,23 @@ impl StorageAdapter for SqliteAdapter {
                 .execute(&pool)
                 .await
                 .map_err(|e| DatabaseError::Other(e.to_string()))?;
+
+            // Create the permissions table for document-level security.
+            let perms_table = SqliteUtils::qualified_permissions_table_name(&context, schema.id);
+            let perms_sql = format!(
+                "CREATE TABLE IF NOT EXISTS {perms_table} (\
+                    document_id INTEGER NOT NULL REFERENCES {table}({seq}) ON DELETE CASCADE, \
+                    permission_type TEXT NOT NULL, \
+                    permissions TEXT NOT NULL DEFAULT '[]', \
+                    PRIMARY KEY (document_id, permission_type)\
+                )",
+                seq = database_core::COLUMN_SEQUENCE,
+            );
+            sqlx::query(&perms_sql)
+                .execute(&pool)
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+
             Ok(())
         })
     }
@@ -124,15 +141,15 @@ impl StorageAdapter for SqliteAdapter {
                 return Ok(Vec::new());
             }
             let table = SqliteUtils::qualified_table_name(&context, schema.id);
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
-            let mut results = Vec::new();
+            let perms_table = SqliteUtils::qualified_permissions_table_name(&context, schema.id);
             let attrs: Vec<_> = schema.persisted_attributes().collect();
 
-            for mut record in values {
-                let mut builder = QueryBuilder::<Sqlite>::new(format!("INSERT INTO {table} ("));
+            // SQLite RETURNING on multi-row inserts is supported since 3.35.
+            // We insert all rows in one statement and collect the auto-generated
+            // _id (ROWID) values in order.
+            let mut builder = QueryBuilder::<Sqlite>::new(format!("INSERT INTO {table} ("));
+            {
+                // column list
                 builder.push(format!(
                     "{}, {}, {}, {}",
                     COLUMN_ID,
@@ -144,60 +161,101 @@ impl StorageAdapter for SqliteAdapter {
                     builder.push(", ");
                     builder.push(SqliteUtils::quote_identifier(a.column));
                 }
-                builder.push(") VALUES (");
-
-                {
-                    let mut sep = builder.separated(", ");
-                    sep.push_bind(record.get(FIELD_ID).unwrap().as_str().unwrap().to_string());
-                    sep.push_bind(
-                        record
-                            .get(FIELD_CREATED_AT)
-                            .unwrap()
-                            .as_timestamp()
-                            .unwrap()
-                            .format(&time::format_description::well_known::Rfc3339)
-                            .unwrap(),
-                    );
-                    sep.push_bind(
-                        record
-                            .get(FIELD_UPDATED_AT)
-                            .unwrap()
-                            .as_timestamp()
-                            .unwrap()
-                            .format(&time::format_description::well_known::Rfc3339)
-                            .unwrap(),
-                    );
-                    sep.push_bind(
-                        serde_json::to_string(
-                            record
-                                .get(FIELD_PERMISSIONS)
-                                .unwrap()
-                                .as_string_array()
-                                .unwrap(),
-                        )
+            }
+            builder.push(") ");
+            builder.push_values(values.iter(), |mut sep, record| {
+                sep.push_bind(record.get(FIELD_ID).unwrap().as_str().unwrap().to_string());
+                sep.push_bind(
+                    record
+                        .get(FIELD_CREATED_AT)
+                        .unwrap()
+                        .as_timestamp()
+                        .unwrap()
+                        .format(&time::format_description::well_known::Rfc3339)
                         .unwrap(),
-                    );
+                );
+                sep.push_bind(
+                    record
+                        .get(FIELD_UPDATED_AT)
+                        .unwrap()
+                        .as_timestamp()
+                        .unwrap()
+                        .format(&time::format_description::well_known::Rfc3339)
+                        .unwrap(),
+                );
+                sep.push_bind(
+                    serde_json::to_string(
+                        record
+                            .get(FIELD_PERMISSIONS)
+                            .unwrap()
+                            .as_string_array()
+                            .unwrap_or(&[]),
+                    )
+                    .unwrap(),
+                );
+                for a in &attrs {
+                    let val = record.get(a.id).unwrap_or(&StorageValue::Null);
+                    SqliteQuery::push_bind_value_separated(&mut sep, val);
+                }
+            });
+            builder.push(format!(" RETURNING {COLUMN_SEQUENCE}"));
 
-                    for a in &attrs {
-                        let val = record.get(a.id).unwrap_or(&StorageValue::Null);
-                        SqliteQuery::push_bind_value_separated(&mut sep, val);
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+
+            let rows = builder
+                .build()
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+
+            // ── Collect results and build perms rows ──────────────────────
+            let mut perms_rows: Vec<(i64, String, String)> = Vec::new(); // (seq, type, json_roles)
+            let mut results = Vec::with_capacity(values.len());
+
+            for (i, row) in rows.into_iter().enumerate() {
+                let seq: i64 = row.get(0);
+                let permissions = match values[i].get(FIELD_PERMISSIONS) {
+                    Some(StorageValue::StringArray(v)) => v.clone(),
+                    _ => Vec::new(),
+                };
+
+                if !permissions.is_empty() {
+                    let grouped = database_core::utils::permission_rows(&permissions)?;
+                    for (pt, roles) in grouped {
+                        perms_rows.push((seq, pt, serde_json::to_string(&roles).unwrap()));
                     }
                 }
 
-                builder.push(") RETURNING ");
-                builder.push(COLUMN_SEQUENCE);
-
-                let row = builder
-                    .build()
-                    .fetch_one(&mut *tx)
-                    .await
-                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
-                record.insert(FIELD_SEQUENCE.to_string(), StorageValue::Int(row.get(0)));
+                let mut record = values[i].clone();
+                record.insert(FIELD_SEQUENCE.to_string(), StorageValue::Int(seq));
                 results.push(record);
             }
+
+            // ── Bulk-insert into the permissions table ────────────────────
+            // SQLite doesn't support array bind parameters so we use individual
+            // binds in a VALUES list.
+            if !perms_rows.is_empty() {
+                let mut pb = QueryBuilder::<Sqlite>::new(format!(
+                    "INSERT INTO {perms_table} (document_id, permission_type, permissions) "
+                ));
+                pb.push_values(perms_rows.iter(), |mut sep, (seq, pt, roles_json)| {
+                    sep.push_bind(*seq);
+                    sep.push_bind(pt.clone());
+                    sep.push_bind(roles_json.clone());
+                });
+                pb.build()
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            }
+
             tx.commit()
                 .await
                 .map_err(|e| DatabaseError::Other(e.to_string()))?;
+
             Ok(results)
         })
     }

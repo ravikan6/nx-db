@@ -113,7 +113,7 @@ impl Model for RestrictedUser {
         _context: &Context,
     ) -> Result<Self::Entity, DatabaseError> {
         Ok(RestrictedUserEntity {
-            id: take_required(&mut record, nx_db::FIELD_ID)?,
+            id: nx_db::get_required(&record, nx_db::FIELD_ID)?,
             name: take_required(&mut record, "name")?,
             _metadata: nx_db::core::model::extract_metadata(&mut record)?,
         })

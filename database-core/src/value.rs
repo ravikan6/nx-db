@@ -50,9 +50,9 @@ pub fn take_required<T>(record: &mut StorageRecord, key: &str) -> Result<T, Data
 where
     T: FromStorage,
 {
-    let value = record.remove(key).ok_or_else(|| {
-        DatabaseError::Other(format!("missing required field '{key}'"))
-    })?;
+    let value = record
+        .remove(key)
+        .ok_or_else(|| DatabaseError::Other(format!("missing required field '{key}'")))?;
     T::from_storage(value)
 }
 
@@ -60,9 +60,9 @@ pub fn get_required<T>(record: &StorageRecord, key: &str) -> Result<T, DatabaseE
 where
     T: FromStorage,
 {
-    let value = record.get(key).ok_or_else(|| {
-        DatabaseError::Other(format!("missing required field '{key}'"))
-    })?;
+    let value = record
+        .get(key)
+        .ok_or_else(|| DatabaseError::Other(format!("missing required field '{key}'")))?;
     T::from_storage(value.clone())
 }
 
@@ -340,6 +340,109 @@ impl FromStorage for Vec<OffsetDateTime> {
                 "expected timestamp array storage value, got {other:?}"
             ))),
         }
+    }
+}
+
+// ── Relationship population ────────────────────────────────────────────────
+
+/// Represents a relationship field that may or may not have been eagerly loaded.
+///
+/// Use `Populated::NotLoaded` for the default state after a plain `find`/`get`,
+/// and `Populated::Loaded(...)` after an explicit populate call.
+///
+/// # Serde / bincode round-trip
+///
+/// `Populated` intentionally serialises as `null` (or a 0-byte tag for bincode)
+/// and always deserialises as `NotLoaded`.  This means populated relationships
+/// are never written to cache or the database — which is the correct semantic.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Populated<T> {
+    /// The relationship has not been fetched yet.
+    NotLoaded,
+    /// The relationship was fetched.
+    /// `Some(T)` — entity found; `None` — FK was `NULL` or entity is missing.
+    Loaded(Option<T>),
+}
+
+impl<T> Default for Populated<T> {
+    fn default() -> Self {
+        Self::NotLoaded
+    }
+}
+
+impl<T> Populated<T> {
+    /// Return a reference to the loaded entity, if any.
+    pub fn get(&self) -> Option<&T> {
+        match self {
+            Self::Loaded(Some(v)) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Consume and return the inner `Option`, or `None` if not loaded.
+    pub fn into_loaded(self) -> Option<T> {
+        match self {
+            Self::Loaded(v) => v,
+            Self::NotLoaded => None,
+        }
+    }
+
+    /// Returns `true` if `populate_*` has been called for this field.
+    pub fn is_loaded(&self) -> bool {
+        !matches!(self, Self::NotLoaded)
+    }
+
+    /// Map the inner value without changing the loaded state.
+    pub fn map<U>(self, f: impl FnOnce(T) -> U) -> Populated<U> {
+        match self {
+            Self::NotLoaded => Populated::NotLoaded,
+            Self::Loaded(opt) => Populated::Loaded(opt.map(f)),
+        }
+    }
+}
+
+impl<T: serde::Serialize> serde::Serialize for Populated<T> {
+    /// Always serialises as `null` so populated data is never persisted to cache.
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_none()
+    }
+}
+
+impl<'de, T: serde::de::DeserializeOwned> serde::Deserialize<'de> for Populated<T> {
+    /// Always deserialises as `NotLoaded` regardless of the stored value.
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let _ = serde::de::IgnoredAny::deserialize(d)?;
+        Ok(Self::NotLoaded)
+    }
+}
+
+// bincode 2.0 encode/decode — encode as a single 0 byte; decode always returns NotLoaded.
+impl<T: bincode::Encode> bincode::Encode for Populated<T> {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        0u8.encode(encoder)
+    }
+}
+
+impl<Context, T: bincode::Decode<Context>> bincode::Decode<Context> for Populated<T> {
+    fn decode<D: bincode::de::Decoder<Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let _ = u8::decode(decoder)?;
+        Ok(Self::NotLoaded)
+    }
+}
+
+impl<'de, Context, T: bincode::BorrowDecode<'de, Context>> bincode::BorrowDecode<'de, Context>
+    for Populated<T>
+{
+    fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let _ = u8::borrow_decode(decoder)?;
+        Ok(Self::NotLoaded)
     }
 }
 

@@ -461,3 +461,55 @@ impl<const MAX: usize> IntoQueryValue for &Key<MAX> {
         StorageValue::String(self.to_string())
     }
 }
+
+// ── Typed relationship descriptors ────────────────────────────────────────
+
+/// A compile-time descriptor for a typed relationship between two models.
+///
+/// `Rel` captures the attribute ids used on each side of the relationship so
+/// that `populate_parent` / `populate_children` calls are fully type-safe and
+/// self-documenting.
+///
+/// # Creating a descriptor
+///
+/// ```rust,ignore
+/// // Many-to-one: Post.author_id → User.id
+/// pub const POST_AUTHOR: Rel<Post, User> = Rel::parent("author_id");
+///
+/// // One-to-many: User.id ← Post.user_id
+/// pub const USER_POSTS: Rel<User, Post> = Rel::children("userId");
+/// ```
+#[derive(Debug, Clone, Copy)]
+pub struct Rel<L, R> {
+    /// The attribute id on `L` that participates in the join.
+    /// For many-to-one this is the FK column; for one-to-many this is `"id"`.
+    pub local_field: &'static str,
+    /// The attribute id on `R` that participates in the join.
+    /// For many-to-one this is `"id"`; for one-to-many this is the FK column.
+    pub remote_field: &'static str,
+    _phantom: std::marker::PhantomData<fn() -> (L, R)>,
+}
+
+impl<L, R> Rel<L, R> {
+    /// Many-to-one: `local_fk` on `L` is a FK pointing to `R`'s primary key.
+    ///
+    /// Example: `Post.author_id → User.id`
+    pub const fn parent(local_fk: &'static str) -> Self {
+        Self {
+            local_field: local_fk,
+            remote_field: crate::system_fields::FIELD_ID,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    /// One-to-many: `remote_fk` on `R` is a FK pointing back to `L`'s primary key.
+    ///
+    /// Example: `User.id ← Post.user_id`
+    pub const fn children(remote_fk: &'static str) -> Self {
+        Self {
+            local_field: crate::system_fields::FIELD_ID,
+            remote_field: remote_fk,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+}

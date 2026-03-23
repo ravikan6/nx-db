@@ -1731,7 +1731,12 @@ mod tests {
             .register(&USERS)
             .expect("registry should accept collection");
         let events = RecordingEvents::default();
-        let database = Database::builder().with_adapter(FakeAdapter::default()).with_registry(registry).with_events(events.clone()).build().expect("database should build");
+        let database = Database::builder()
+            .with_adapter(FakeAdapter::default())
+            .with_registry(registry)
+            .with_events(events.clone())
+            .build()
+            .expect("database should build");
 
         block_on(database.create_collection("users")).expect("collection should be created");
 
@@ -1860,7 +1865,12 @@ mod tests {
             .register(&USERS)
             .expect("registry should accept collection");
         let events = RecordingEvents::default();
-        let database = Database::builder().with_adapter(adapter).with_registry(registry).with_events(events.clone()).build().expect("database should build");
+        let database = Database::builder()
+            .with_adapter(adapter)
+            .with_registry(registry)
+            .with_events(events.clone())
+            .build()
+            .expect("database should build");
         let repo = database.repo::<EncodedUser>();
 
         let created = block_on(repo.insert(CreateUser {
@@ -1984,7 +1994,12 @@ mod tests {
             .register(&USERS)
             .expect("registry should accept collection");
         let events = RecordingEvents::default();
-        let database = Database::builder().with_adapter(adapter).with_registry(registry).with_events(events.clone()).build().expect("database should build");
+        let database = Database::builder()
+            .with_adapter(adapter)
+            .with_registry(registry)
+            .with_events(events.clone())
+            .build()
+            .expect("database should build");
         let repo = database.repo::<EncodedUser>();
 
         let created = block_on(repo.insert(CreateUser {
@@ -2035,7 +2050,12 @@ mod tests {
             .register(&USERS)
             .expect("registry should accept collection");
         let events = RecordingEvents::default();
-        let database = Database::builder().with_adapter(FakeAdapter::default()).with_registry(registry).with_events(events.clone()).build().expect("database should build");
+        let database = Database::builder()
+            .with_adapter(FakeAdapter::default())
+            .with_registry(registry)
+            .with_events(events.clone())
+            .build()
+            .expect("database should build");
         let repo = database.repo::<User>();
 
         let created = block_on(repo.insert(CreateUser {

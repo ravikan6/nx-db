@@ -43,10 +43,7 @@ fn run_check(args: &[&str], label: &str) {
 
 #[test]
 fn feature_matrix_compiles() {
-    run_check(
-        &["-p", "nx-db", "--features", "postgres"],
-        "root-postgres",
-    );
+    run_check(&["-p", "nx-db", "--features", "postgres"], "root-postgres");
     run_check(
         &["-p", "nx-db", "--features", "cache-redis"],
         "root-cache-redis",

@@ -213,8 +213,8 @@ impl FromStr for Permission {
     }
 }
 
-use std::collections::BTreeMap;
 use crate::errors::DatabaseError;
+use std::collections::BTreeMap;
 
 pub fn permission_rows(
     permissions: &[String],

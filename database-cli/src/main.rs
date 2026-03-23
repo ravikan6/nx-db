@@ -114,13 +114,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         nx_db::postgres::migration::MigrationChange::CreateTable(id) => {
                             println!("  - Create table {}", id);
                         }
-                        nx_db::postgres::migration::MigrationChange::AddColumn { table, column, sql_type, .. } => {
+                        nx_db::postgres::migration::MigrationChange::AddColumn {
+                            table,
+                            column,
+                            sql_type,
+                            ..
+                        } => {
                             println!("  - Add column {}.{} ({})", table, column, sql_type);
                         }
-                        nx_db::postgres::migration::MigrationChange::CreateIndex { index_id, .. } => {
+                        nx_db::postgres::migration::MigrationChange::CreateIndex {
+                            index_id,
+                            ..
+                        } => {
                             println!("  - Create index {}", index_id);
                         }
-                        nx_db::postgres::migration::MigrationChange::DropIndex { index_id, .. } => {
+                        nx_db::postgres::migration::MigrationChange::DropIndex {
+                            index_id, ..
+                        } => {
                             println!("  - Drop index {}", index_id);
                         }
                     }
@@ -136,8 +146,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else if url.starts_with("sqlite:") {
                 use sqlx::sqlite::SqliteConnectOptions;
                 use std::str::FromStr;
-                let options = SqliteConnectOptions::from_str(&url)?
-                    .create_if_missing(true);
+                let options = SqliteConnectOptions::from_str(&url)?.create_if_missing(true);
                 let pool = sqlx::SqlitePool::connect_with(options).await?;
                 let engine = nx_db::sqlite::migration::MigrationEngine::new(&pool);
 
@@ -154,7 +163,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         nx_db::sqlite::migration::MigrationChange::CreateTable(id) => {
                             println!("  - Create table {}", id);
                         }
-                        nx_db::sqlite::migration::MigrationChange::AddColumn { table, column, sql_type, .. } => {
+                        nx_db::sqlite::migration::MigrationChange::AddColumn {
+                            table,
+                            column,
+                            sql_type,
+                            ..
+                        } => {
                             println!("  - Add column {}.{} ({})", table, column, sql_type);
                         }
                     }

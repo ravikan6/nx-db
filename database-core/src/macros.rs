@@ -145,6 +145,7 @@ macro_rules! impl_model {
             $($field_id:expr => $field_name:ident : $field_type:ty $([ $encoder:ident, $decoder:ident ])? $(:$required:ident)?),*
         }
         $(, virtuals: { $($virtual_field:ident),* })?
+        $(, loaded: { $($loaded_field:ident),* })?
         $(, resolvers: { $($resolver_field:ident : $resolver_fn:path),* })?
     ) => {
         impl $crate::Model for $model_name {
@@ -210,6 +211,9 @@ macro_rules! impl_model {
                     )*
                     $($(
                         $virtual_field: None,
+                    )*)?
+                    $($(
+                        $loaded_field: $crate::Populated::NotLoaded,
                     )*)?
                 })
             }

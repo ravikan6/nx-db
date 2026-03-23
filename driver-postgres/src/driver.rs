@@ -87,27 +87,18 @@ impl StorageAdapter for PostgresAdapter {
                 PostgresUtils::quote_identifier(context.schema())?
             );
             let table = PostgresUtils::qualified_table_name(&context, schema.id)?;
+            let seq_col = PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?;
+            let id_col = PostgresUtils::quote_identifier(database_core::COLUMN_ID)?;
+            let created_col = PostgresUtils::quote_identifier(database_core::COLUMN_CREATED_AT)?;
+            let updated_col = PostgresUtils::quote_identifier(database_core::COLUMN_UPDATED_AT)?;
+            let perms_col = PostgresUtils::quote_identifier(database_core::COLUMN_PERMISSIONS)?;
+
             let mut cols = vec![
-                format!(
-                    "{} BIGINT NOT NULL GENERATED ALWAYS AS IDENTITY",
-                    PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?
-                ),
-                format!(
-                    "{} VARCHAR(255) NOT NULL",
-                    PostgresUtils::quote_identifier(database_core::COLUMN_ID)?
-                ),
-                format!(
-                    "{} TIMESTAMPTZ DEFAULT NULL",
-                    PostgresUtils::quote_identifier(database_core::COLUMN_CREATED_AT)?
-                ),
-                format!(
-                    "{} TIMESTAMPTZ DEFAULT NULL",
-                    PostgresUtils::quote_identifier(database_core::COLUMN_UPDATED_AT)?
-                ),
-                format!(
-                    "{} TEXT[] DEFAULT '{{}}'",
-                    PostgresUtils::quote_identifier(database_core::COLUMN_PERMISSIONS)?
-                ),
+                format!("{seq_col} BIGINT NOT NULL GENERATED ALWAYS AS IDENTITY"),
+                format!("{id_col} VARCHAR(255) NOT NULL"),
+                format!("{created_col} TIMESTAMPTZ NOT NULL DEFAULT NOW()"),
+                format!("{updated_col} TIMESTAMPTZ NOT NULL DEFAULT NOW()"),
+                format!("{perms_col} TEXT[] NOT NULL DEFAULT '{{}}'"),
             ];
             for attr in schema.persisted_attributes() {
                 let sql_type = PostgresUtils::sql_type(attr.kind, attr.array, attr.length);
@@ -122,32 +113,140 @@ impl StorageAdapter for PostgresAdapter {
                 ));
             }
             let table_sql = format!(
-                "CREATE TABLE IF NOT EXISTS {table} ({}, PRIMARY KEY ({}))",
+                "CREATE TABLE IF NOT EXISTS {table} ({}, PRIMARY KEY ({seq_col}))",
                 cols.join(", "),
-                PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?
-            );
-            let perms_table = PostgresUtils::qualified_permissions_table_name(&context, schema.id)?;
-            let perms_sql = format!(
-                "CREATE TABLE IF NOT EXISTS {perms_table} (document_id BIGINT NOT NULL, permission_type TEXT NOT NULL, permissions TEXT[] NOT NULL DEFAULT '{{}}', PRIMARY KEY (document_id, permission_type), FOREIGN KEY (document_id) REFERENCES {table}({}) ON DELETE CASCADE)",
-                PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?
             );
 
+            let perms_table = PostgresUtils::qualified_permissions_table_name(&context, schema.id)?;
+            let perms_sql = format!(
+                "CREATE TABLE IF NOT EXISTS {perms_table} (\
+                    document_id BIGINT NOT NULL, \
+                    permission_type TEXT NOT NULL, \
+                    permissions TEXT[] NOT NULL DEFAULT '{{}}', \
+                    PRIMARY KEY (document_id, permission_type), \
+                    FOREIGN KEY (document_id) REFERENCES {table}({seq_col}) ON DELETE CASCADE\
+                )"
+            );
+
+            // ── System indexes ────────────────────────────────────────────
+            let cid = schema.id;
+            let uid_idx = format!(
+                "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {table} ({id_col})",
+                PostgresUtils::quote_identifier(&format!("{cid}_uid"))?
+            );
+            let created_idx = format!(
+                "CREATE INDEX IF NOT EXISTS {} ON {table} ({created_col})",
+                PostgresUtils::quote_identifier(&format!("{cid}_created_at"))?
+            );
+            let updated_idx = format!(
+                "CREATE INDEX IF NOT EXISTS {} ON {table} ({updated_col})",
+                PostgresUtils::quote_identifier(&format!("{cid}_updated_at"))?
+            );
+            let perms_gin_idx = format!(
+                "CREATE INDEX IF NOT EXISTS {} ON {table} USING GIN ({perms_col})",
+                PostgresUtils::quote_identifier(&format!("{cid}_permissions_gin_idx"))?
+            );
+            let perms_table_gin_idx = format!(
+                "CREATE INDEX IF NOT EXISTS {} ON {perms_table} USING GIN (permissions)",
+                PostgresUtils::quote_identifier(&format!("{cid}_perms_permissions_gin_idx"))?
+            );
+            let perms_type_idx = format!(
+                "CREATE INDEX IF NOT EXISTS {} ON {perms_table} (permission_type)",
+                PostgresUtils::quote_identifier(&format!("{cid}_perms_permission_type_idx"))?
+            );
+            let perms_doc_idx = format!(
+                "CREATE INDEX IF NOT EXISTS {} ON {perms_table} (document_id)",
+                PostgresUtils::quote_identifier(&format!("{cid}_perms_document_id_idx"))?
+            );
+
+            // ── Schema-declared indexes ───────────────────────────────────
+            let mut schema_indexes: Vec<String> = Vec::new();
+            for index in schema.indexes {
+                let idx_name = PostgresUtils::quote_identifier(index.id)?;
+
+                // Build column list with optional sort directions
+                let mut col_parts: Vec<String> = Vec::new();
+                for (pos, attr_id) in index.attributes.iter().enumerate() {
+                    let col = PostgresUtils::column_for_field(schema, attr_id)?;
+                    let dir = index
+                        .orders
+                        .get(pos)
+                        .map(|o| match o {
+                            database_core::Order::Asc => " ASC",
+                            database_core::Order::Desc => " DESC",
+                            database_core::Order::None => "",
+                        })
+                        .unwrap_or("");
+                    col_parts.push(format!("{col}{dir}"));
+                }
+                let col_list = col_parts.join(", ");
+
+                let stmt = match index.kind {
+                    database_core::IndexKind::Key => {
+                        format!("CREATE INDEX IF NOT EXISTS {idx_name} ON {table} ({col_list})")
+                    }
+                    database_core::IndexKind::Unique => {
+                        format!(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS {idx_name} ON {table} ({col_list})"
+                        )
+                    }
+                    database_core::IndexKind::FullText => {
+                        // Build tsvector expression over all listed columns
+                        let ts_expr = index
+                            .attributes
+                            .iter()
+                            .map(|attr_id| {
+                                PostgresUtils::column_for_field(schema, attr_id)
+                                    .map(|col| format!("COALESCE({col}::text, '')"))
+                            })
+                            .collect::<Result<Vec<_>, _>>()?
+                            .join(" || ' ' || ");
+                        format!(
+                            "CREATE INDEX IF NOT EXISTS {idx_name} ON {table} \
+                             USING GIN (to_tsvector('simple', {ts_expr}))"
+                        )
+                    }
+                    database_core::IndexKind::Spatial => {
+                        return Err(DatabaseError::Other(format!(
+                            "collection '{}': postgres driver does not support spatial indexes",
+                            schema.id
+                        )));
+                    }
+                };
+                schema_indexes.push(stmt);
+            }
+
+            // ── Execute everything in one transaction ─────────────────────
             let mut tx = pool
                 .begin()
                 .await
                 .map_err(|e| DatabaseError::Other(e.to_string()))?;
-            sqlx::query(&schema_sql)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
-            sqlx::query(&table_sql)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
-            sqlx::query(&perms_sql)
-                .execute(&mut *tx)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+
+            let ddl_statements: &[&str] = &[
+                schema_sql.as_str(),
+                table_sql.as_str(),
+                perms_sql.as_str(),
+                uid_idx.as_str(),
+                created_idx.as_str(),
+                updated_idx.as_str(),
+                perms_gin_idx.as_str(),
+                perms_table_gin_idx.as_str(),
+                perms_type_idx.as_str(),
+                perms_doc_idx.as_str(),
+            ];
+            for stmt in ddl_statements {
+                sqlx::query(stmt)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| DatabaseError::Other(format!("DDL failed ({stmt}): {e}")))?;
+            }
+            for stmt in &schema_indexes {
+                sqlx::query(stmt)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| DatabaseError::Other(format!("index DDL failed ({stmt}): {e}")))?;
+            }
+
             tx.commit()
                 .await
                 .map_err(|e| DatabaseError::Other(e.to_string()))?;
@@ -181,8 +280,12 @@ impl StorageAdapter for PostgresAdapter {
             if values.is_empty() {
                 return Ok(Vec::new());
             }
+
             let table = PostgresUtils::qualified_table_name(&context, schema.id)?;
+            let perms_table = PostgresUtils::qualified_permissions_table_name(&context, schema.id)?;
             let attributes: Vec<_> = schema.persisted_attributes().collect();
+
+            // ── Build the bulk INSERT for the main table ──────────────────
             let mut builder = QueryBuilder::<Postgres>::new(format!("INSERT INTO {table} ("));
             {
                 let mut sep = builder.separated(", ");
@@ -227,17 +330,61 @@ impl StorageAdapter for PostgresAdapter {
                 " RETURNING {}",
                 PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?
             ));
-            let rows = builder
-                .build()
-                .fetch_all(&pool)
+
+            let mut tx = pool
+                .begin()
                 .await
                 .map_err(|e| DatabaseError::Other(e.to_string()))?;
-            let mut results = Vec::new();
+
+            let rows = builder
+                .build()
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+
+            // ── Collect results and build perms rows ──────────────────────
+            // Each entry: (document_id, permission_type, role_array)
+            let mut perms_rows: Vec<(i64, String, Vec<String>)> = Vec::new();
+            let mut results = Vec::with_capacity(values.len());
+
             for (i, row) in rows.into_iter().enumerate() {
+                let seq: i64 = row.get(0);
+                let permissions =
+                    PostgresUtils::extract_optional_string_array(&values[i], FIELD_PERMISSIONS)
+                        .unwrap_or_default();
+
+                if !permissions.is_empty() {
+                    let grouped = database_core::utils::permission_rows(&permissions)?;
+                    for (pt, roles) in grouped {
+                        perms_rows.push((seq, pt, roles));
+                    }
+                }
+
                 let mut record = values[i].clone();
-                record.insert(FIELD_SEQUENCE.to_string(), StorageValue::Int(row.get(0)));
+                record.insert(FIELD_SEQUENCE.to_string(), StorageValue::Int(seq));
                 results.push(record);
             }
+
+            // ── Bulk-insert into the permissions table ────────────────────
+            if !perms_rows.is_empty() {
+                let mut pb = QueryBuilder::<Postgres>::new(format!(
+                    "INSERT INTO {perms_table} (document_id, permission_type, permissions) "
+                ));
+                pb.push_values(perms_rows.iter(), |mut sep, (seq, pt, roles)| {
+                    sep.push_bind(*seq);
+                    sep.push_bind(pt.clone());
+                    sep.push_bind(roles.clone());
+                });
+                pb.build()
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            }
+
+            tx.commit()
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+
             Ok(results)
         })
     }

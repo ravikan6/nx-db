@@ -8,7 +8,9 @@ use time::OffsetDateTime;
 
 pub type ModelFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-pub fn extract_metadata(record: &mut crate::traits::storage::StorageRecord) -> Result<Metadata, crate::errors::DatabaseError> {
+pub fn extract_metadata(
+    record: &mut crate::traits::storage::StorageRecord,
+) -> Result<Metadata, crate::errors::DatabaseError> {
     Ok(Metadata {
         sequence: crate::take_required(record, crate::FIELD_SEQUENCE)?,
         uid: crate::take_required(record, crate::FIELD_ID)?,

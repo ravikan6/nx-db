@@ -158,10 +158,15 @@ async fn run_benchmarks_sqlite(
         db,
         |p| {
             Box::pin(async move {
+                let _ = sqlx::query("PRAGMA journal_mode = WAL").execute(&p).await;
+                let _ = sqlx::query("PRAGMA synchronous = NORMAL").execute(&p).await;
+                let _ = sqlx::query("PRAGMA temp_store = MEMORY").execute(&p).await;
+                let _ = sqlx::query("PRAGMA cache_size = -20000").execute(&p).await;
                 let _ = sqlx::query("DELETE FROM users").execute(&p).await;
                 let _ = sqlx::query("DELETE FROM posts").execute(&p).await;
                 let _ = sqlx::query("DELETE FROM users_perms").execute(&p).await;
                 let _ = sqlx::query("DELETE FROM posts_perms").execute(&p).await;
+                let _ = sqlx::query("VACUUM").execute(&p).await;
                 Ok(())
             })
         },

@@ -3,16 +3,15 @@ use crate::database::Database;
 use crate::errors::DatabaseError;
 use crate::events::EventBus;
 use crate::model::Model;
-use crate::query::QuerySpec;
+use crate::query::{Filter, FilterOp, QuerySpec, Rel};
 use crate::registry::CollectionRegistry;
 use crate::schema::CollectionSchema;
-use crate::traits::storage::StorageAdapter;
+use crate::traits::storage::{StorageAdapter, StorageValue};
+use crate::value::Populated;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 
 /// A database handle bound to a specific [`Context`].
-///
-/// Use [`ScopedDatabase::repo`] to get a typed [`Repository`] for a model.
 pub struct ScopedDatabase<'a, A, R, E> {
     database: &'a Database<A, R, E>,
     context: Context,
@@ -42,7 +41,8 @@ impl<'a, A, R, E> ScopedDatabase<'a, A, R, E> {
     }
 }
 
-/// A typed repository that provides CRUD and query operations for model `M`.
+/// A typed repository that provides CRUD, query, and relationship-loading
+/// operations for model `M`.
 pub struct Repository<'a, A, R, E, M> {
     database: &'a Database<A, R, E>,
     context: Context,
@@ -87,7 +87,7 @@ where
         self.database.collection(M::schema().id)
     }
 
-    /// Creates the collection table/index in the backing store.
+    /// Creates the collection table/indexes in the backing store.
     pub async fn create_collection(&self) -> Result<(), DatabaseError> {
         let collection = self.schema()?;
         self.database
@@ -100,7 +100,7 @@ where
         self.database.insert_model::<M>(&self.context, input).await
     }
 
-    /// Insert multiple documents in a single batch.
+    /// Insert multiple documents in a single batch operation.
     pub async fn insert_many(
         &self,
         inputs: Vec<M::Create>,
@@ -110,14 +110,13 @@ where
             .await
     }
 
-    /// Fetch a single document by its id.  Returns `None` when not found or
-    /// when document-level authorization denies access.
+    /// Fetch a single document by id.  Returns `None` when not found or when
+    /// document-level authorization denies access.
     pub async fn get(&self, id: &M::Id) -> Result<Option<M::Entity>, DatabaseError> {
         self.database.get_model::<M>(&self.context, id).await
     }
 
     /// Update a document by id, applying only the supplied patch fields.
-    /// Returns `None` when the document does not exist or is not accessible.
     pub async fn update(
         &self,
         id: &M::Id,
@@ -129,7 +128,6 @@ where
     }
 
     /// Apply the same patch to every document matching `query`.
-    /// Returns the number of affected rows.
     pub async fn update_many(
         &self,
         query: QuerySpec,
@@ -140,13 +138,12 @@ where
             .await
     }
 
-    /// Delete a document by id.  Returns `true` if a row was removed.
+    /// Delete a document by id.
     pub async fn delete(&self, id: &M::Id) -> Result<bool, DatabaseError> {
         self.database.delete_model::<M>(&self.context, id).await
     }
 
     /// Delete every document matching `query`.
-    /// Returns the number of removed rows.
     pub async fn delete_many(&self, query: QuerySpec) -> Result<u64, DatabaseError> {
         self.database
             .delete_many_models::<M>(&self.context, &query)
@@ -169,22 +166,21 @@ where
         self.database.count_models::<M>(&self.context, &query).await
     }
 
-    // -----------------------------------------------------------------------
-    // Relationship helpers
-    // -----------------------------------------------------------------------
+    // ── Batch relationship loading ─────────────────────────────────────────
 
-    /// Load the parent entity for a many-to-one relationship.
+    /// Batch-load the **parent** entities for a many-to-one relationship and
+    /// return them as a `HashMap` keyed by the FK value.
     ///
-    /// For each entity in `entities`, `extract_fk` should return the foreign
-    /// key string (or `None` for nullable FK columns).  The returned map is
-    /// keyed by that foreign-key value.
+    /// Executes exactly **one** `IN (...)` query regardless of how many
+    /// entities are passed.
     ///
     /// # Example
     /// ```ignore
-    /// // posts → user (many-to-one)
+    /// // Load the author for every post (posts -> user)
     /// let users = post_repo
-    ///     .load_parent::<User>(&posts, |post| post.author_id.as_deref().map(String::from))
+    ///     .load_parent::<User>(&posts, |p| Some(p.author_id.clone()))
     ///     .await?;
+    /// let author = users.get(&posts[0].author_id);
     /// ```
     pub async fn load_parent<RM>(
         &self,
@@ -199,7 +195,6 @@ where
             return Ok(HashMap::new());
         }
 
-        // Collect unique non-null foreign keys.
         let mut keys: Vec<String> = Vec::with_capacity(entities.len());
         for entity in entities {
             if let Some(key) = extract_fk(entity) {
@@ -208,43 +203,36 @@ where
                 }
             }
         }
-
         if keys.is_empty() {
             return Ok(HashMap::new());
         }
 
         let repo = self.database.scope(self.context.clone()).repo::<RM>();
-        let query = QuerySpec::new().filter(crate::query::Filter::field(
+        let query = QuerySpec::new().filter(Filter::field(
             crate::system_fields::FIELD_ID,
-            crate::query::FilterOp::In(
-                keys.into_iter()
-                    .map(crate::traits::storage::StorageValue::String)
-                    .collect(),
-            ),
+            FilterOp::In(keys.into_iter().map(StorageValue::String).collect()),
         ));
 
         let related: Vec<RM::Entity> = repo.find(query).await?;
         let mut map = HashMap::with_capacity(related.len());
         for entity in related {
-            let id = RM::id_to_string(RM::entity_to_id(&entity)).to_string();
-            map.insert(id, entity);
+            map.insert(
+                RM::id_to_string(RM::entity_to_id(&entity)).to_string(),
+                entity,
+            );
         }
-
         Ok(map)
     }
 
-    /// Load the child entities for a one-to-many relationship.
+    /// Batch-load **child** entities for a one-to-many relationship and return
+    /// them as a `HashMap` keyed by the local entity's ID.
     ///
-    /// * `extract_local_key` — returns the local entity's primary key string.
-    /// * `foreign_field` — the attribute id on `RM` that holds the FK back to `M`.
-    /// * `extract_fk` — extracts that FK value from a related entity.
-    ///
-    /// Returns a map from local key → `Vec` of related entities.
+    /// Executes exactly **one** `IN (...)` query.
     ///
     /// # Example
     /// ```ignore
-    /// // user → posts (one-to-many)
-    /// let posts_by_user = user_repo
+    /// // Load all posts for each user (user -> posts)
+    /// let posts_map = user_repo
     ///     .load_children::<Post>(
     ///         &users,
     ///         |u| u.id.to_string(),
@@ -277,29 +265,199 @@ where
         }
 
         let repo = self.database.scope(self.context.clone()).repo::<RM>();
-        let query = QuerySpec::new().filter(crate::query::Filter::field(
+        let query = QuerySpec::new().filter(Filter::field(
             foreign_field,
-            crate::query::FilterOp::In(
-                local_keys
-                    .into_iter()
-                    .map(crate::traits::storage::StorageValue::String)
-                    .collect(),
-            ),
+            FilterOp::In(local_keys.into_iter().map(StorageValue::String).collect()),
         ));
 
         let related: Vec<RM::Entity> = repo.find(query).await?;
         let mut map: HashMap<String, Vec<RM::Entity>> = HashMap::new();
-
         for entity in related {
             if let Some(fk) = extract_fk(&entity) {
                 map.entry(fk).or_default().push(entity);
             }
         }
-
         Ok(map)
     }
 
-    /// Deprecated alias for [`Self::load_parent`].
+    // ── In-place population ────────────────────────────────────────────────
+
+    /// Populate a many-to-one relationship **in-place** on a slice of entities.
+    ///
+    /// Uses a single batch query (same as [`load_parent`]).  After this call,
+    /// `set` is invoked once per entity with `Populated::Loaded(Some(related))`
+    /// or `Populated::Loaded(None)` when the FK is null or the related entity
+    /// was not found.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let mut posts = post_repo.find(QuerySpec::new()).await?;
+    /// post_repo
+    ///     .populate_parent::<User>(
+    ///         &mut posts,
+    ///         |p| Some(p.author_id.clone()),
+    ///         |p, loaded| p.author = loaded,
+    ///     )
+    ///     .await?;
+    /// // posts[0].author == Populated::Loaded(Some(UserEntity { ... }))
+    /// ```
+    pub async fn populate_parent<RM>(
+        &self,
+        entities: &mut Vec<M::Entity>,
+        extract_fk: impl Fn(&M::Entity) -> Option<String>,
+        set: impl Fn(&mut M::Entity, Populated<RM::Entity>),
+    ) -> Result<(), DatabaseError>
+    where
+        RM: Model,
+        RM::Entity: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        let map = self.load_parent::<RM>(entities, &extract_fk).await?;
+        for entity in entities.iter_mut() {
+            let loaded = match extract_fk(entity) {
+                Some(fk) => Populated::Loaded(map.get(&fk).cloned()),
+                None => Populated::Loaded(None),
+            };
+            set(entity, loaded);
+        }
+        Ok(())
+    }
+
+    /// Populate a one-to-many relationship **in-place** on a slice of entities.
+    ///
+    /// Uses a single batch query.  After this call, `set` is invoked for every
+    /// entity with the (possibly empty) `Vec` of child entities.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let mut users = user_repo.find(QuerySpec::new()).await?;
+    /// user_repo
+    ///     .populate_children::<Post>(
+    ///         &mut users,
+    ///         |u| u.id.to_string(),
+    ///         "userId",
+    ///         |post| Some(post.user_id.clone()),
+    ///         |u, posts| u.posts = Populated::Loaded(Some(posts)),
+    ///     )
+    ///     .await?;
+    /// ```
+    pub async fn populate_children<RM>(
+        &self,
+        entities: &mut Vec<M::Entity>,
+        extract_local_key: impl Fn(&M::Entity) -> String,
+        foreign_field: &'static str,
+        extract_fk: impl Fn(&RM::Entity) -> Option<String>,
+        set: impl Fn(&mut M::Entity, Vec<RM::Entity>),
+    ) -> Result<(), DatabaseError>
+    where
+        RM: Model,
+        RM::Entity: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        let map = self
+            .load_children::<RM>(entities, &extract_local_key, foreign_field, &extract_fk)
+            .await?;
+        for entity in entities.iter_mut() {
+            let local_key = extract_local_key(entity);
+            let children = map.get(&local_key).cloned().unwrap_or_default();
+            set(entity, children);
+        }
+        Ok(())
+    }
+
+    // ── Combined find + populate ───────────────────────────────────────────
+
+    /// Find entities and populate a many-to-one relationship in **one call**
+    /// (two queries total).
+    ///
+    /// # Example
+    /// ```ignore
+    /// let posts = post_repo
+    ///     .find_with_parent::<User>(
+    ///         QuerySpec::new(),
+    ///         |p| Some(p.author_id.clone()),
+    ///         |p, loaded| p.author = loaded,
+    ///     )
+    ///     .await?;
+    /// ```
+    pub async fn find_with_parent<RM>(
+        &self,
+        query: QuerySpec,
+        extract_fk: impl Fn(&M::Entity) -> Option<String>,
+        set: impl Fn(&mut M::Entity, Populated<RM::Entity>),
+    ) -> Result<Vec<M::Entity>, DatabaseError>
+    where
+        RM: Model,
+        RM::Entity: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        let mut entities = self.find(query).await?;
+        self.populate_parent::<RM>(&mut entities, extract_fk, set)
+            .await?;
+        Ok(entities)
+    }
+
+    /// Find entities and populate a one-to-many relationship in **one call**
+    /// (two queries total).
+    pub async fn find_with_children<RM>(
+        &self,
+        query: QuerySpec,
+        extract_local_key: impl Fn(&M::Entity) -> String,
+        foreign_field: &'static str,
+        extract_fk: impl Fn(&RM::Entity) -> Option<String>,
+        set: impl Fn(&mut M::Entity, Vec<RM::Entity>),
+    ) -> Result<Vec<M::Entity>, DatabaseError>
+    where
+        RM: Model,
+        RM::Entity: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        let mut entities = self.find(query).await?;
+        self.populate_children::<RM>(
+            &mut entities,
+            extract_local_key,
+            foreign_field,
+            extract_fk,
+            set,
+        )
+        .await?;
+        Ok(entities)
+    }
+
+    // ── Typed Rel-based helpers ────────────────────────────────────────────
+
+    /// Like [`load_parent`] but driven by a [`Rel`] descriptor instead of a
+    /// raw field name string.
+    ///
+    /// The `Rel` stores the local FK attribute id; you still supply the closure
+    /// that extracts the runtime FK value from each entity.
+    pub async fn load_related_parent<RM>(
+        &self,
+        entities: &[M::Entity],
+        _rel: Rel<M, RM>,
+        extract_fk: impl Fn(&M::Entity) -> Option<String>,
+    ) -> Result<HashMap<String, RM::Entity>, DatabaseError>
+    where
+        RM: Model,
+        RM::Entity: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        self.load_parent::<RM>(entities, extract_fk).await
+    }
+
+    /// Like [`load_children`] but driven by a [`Rel`] descriptor.
+    pub async fn load_related_children<RM>(
+        &self,
+        entities: &[M::Entity],
+        rel: Rel<M, RM>,
+        extract_local_key: impl Fn(&M::Entity) -> String,
+        extract_fk: impl Fn(&RM::Entity) -> Option<String>,
+    ) -> Result<HashMap<String, Vec<RM::Entity>>, DatabaseError>
+    where
+        RM: Model,
+        RM::Entity: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        self.load_children::<RM>(entities, extract_local_key, rel.remote_field, extract_fk)
+            .await
+    }
+
+    // ── Deprecated aliases ─────────────────────────────────────────────────
+
     #[deprecated(since = "0.2.0", note = "use `load_parent` instead")]
     pub async fn load_many_to_one<RM>(
         &self,
@@ -313,7 +471,6 @@ where
         self.load_parent::<RM>(entities, extract_foreign_key).await
     }
 
-    /// Deprecated alias for [`Self::load_children`].
     #[deprecated(since = "0.2.0", note = "use `load_children` instead")]
     pub async fn load_one_to_many<RM>(
         &self,

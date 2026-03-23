@@ -1,6 +1,6 @@
 pub mod driver;
+pub mod migration;
 pub mod query;
 pub mod utils;
-pub mod migration;
 
 pub use driver::PostgresAdapter;

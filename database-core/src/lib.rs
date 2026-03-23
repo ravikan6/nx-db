@@ -51,7 +51,7 @@ pub use model::{Metadata, Model, ModelFuture};
 
 // ── Query ─────────────────────────────────────────────────────────────────────
 pub use query::{
-    EncodedField, Field, Filter, FilterOp, IntoQueryValue, QuerySpec, Sort, SortDirection,
+    EncodedField, Field, Filter, FilterOp, IntoQueryValue, QuerySpec, Rel, Sort, SortDirection,
 };
 
 // ── Registry ──────────────────────────────────────────────────────────────────
@@ -71,8 +71,8 @@ pub use utils::{
 
 // ── Value helpers ─────────────────────────────────────────────────────────────
 pub use value::{
-    FromStorage, IntoStorage, Patch, get_optional, get_required, insert_value, take_optional,
-    take_required,
+    FromStorage, IntoStorage, Patch, Populated, get_optional, get_required, insert_value,
+    take_optional, take_required,
 };
 
 // ── Re-export the `time` crate so downstream crates don't need to add it.

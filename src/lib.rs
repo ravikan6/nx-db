@@ -62,7 +62,10 @@ pub use database_core::{
     // Utilities
     Permission,
     PermissionEnum,
+    // Relationship population
+    Populated,
     QuerySpec,
+    Rel,
     RelationshipKind,
     RelationshipSchema,
     RelationshipSide,
