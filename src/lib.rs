@@ -1,5 +1,6 @@
 pub use database_cache as cache;
 pub use database_core as core;
+pub use database_derive::{NxCreate, NxEntity, NxUpdate};
 
 // ── Sub-module aliases so paths like `nx_db::traits::storage::…` keep working.
 pub mod traits {
@@ -23,6 +24,7 @@ pub use database_core::{
     CollectionSchema,
     // Context
     Context,
+    CreateRecord,
     // Database & repository
     Database,
     DatabaseBuilder,
@@ -31,6 +33,7 @@ pub use database_core::{
     DefaultValue,
     // Query
     EncodedField,
+    EntityRecord,
     // Events
     Event,
     EventBus,
@@ -65,19 +68,28 @@ pub use database_core::{
     Permission,
     PermissionEnum,
     // Relationship population
+    PopulateDescriptor,
+    PopulateMany,
+    PopulateOne,
     Populated,
+    QueryInclude,
     QuerySpec,
     Rel,
+    RelationMany,
+    RelationOne,
     RelationshipKind,
     RelationshipSchema,
     RelationshipSide,
     Repository,
+    RepositoryQuery,
     Role,
     RoleName,
     ScopedDatabase,
     Sort,
     SortDirection,
     StaticRegistry,
+    ThroughRel,
+    UpdateRecord,
     generate_id_string,
     get_optional,
     get_required,
@@ -90,7 +102,8 @@ pub use database_core::{
 
 // ── Macro re-exports ──────────────────────────────────────────────────────────
 pub use database_core::{
-    and, db_context, db_query, db_registry, impl_create_builder, impl_model, not, or,
+    and, db_context, db_query, db_registry, impl_create_builder, impl_model,
+    impl_model_record_bridge, not, or,
 };
 
 // ── Driver feature modules ────────────────────────────────────────────────────
@@ -123,7 +136,7 @@ pub mod prelude {
     pub use crate::sqlite::SqliteAdapter;
     pub use crate::{
         Context, Database, DatabaseError, Field, Filter, Key, Model, Patch, QuerySpec, Repository,
-        Role, StaticRegistry,
+        RepositoryQuery, Role, StaticRegistry,
     };
 }
 

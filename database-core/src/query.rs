@@ -1,6 +1,9 @@
+use crate::enums::RelationshipKind;
 use crate::errors::DatabaseError;
 use crate::key::Key;
+use crate::model::Model;
 use crate::traits::storage::StorageValue;
+use crate::value::{RelationMany, RelationOne};
 use std::marker::PhantomData;
 use time::OffsetDateTime;
 
@@ -64,6 +67,7 @@ pub struct QuerySpec {
     filters: Vec<Filter>,
     sorts: Vec<Sort>,
     selects: Vec<&'static str>,
+    includes: Vec<QueryInclude>,
     limit: Option<usize>,
     offset: Option<usize>,
 }
@@ -102,6 +106,14 @@ impl QuerySpec {
         self
     }
 
+    pub fn include<I>(mut self, include: I) -> Self
+    where
+        I: Into<QueryInclude>,
+    {
+        self.includes.push(include.into());
+        self
+    }
+
     pub fn limit(mut self, limit: usize) -> Self {
         self.limit = Some(limit);
         self
@@ -122,6 +134,10 @@ impl QuerySpec {
 
     pub fn selects(&self) -> &[&'static str] {
         &self.selects
+    }
+
+    pub fn includes(&self) -> &[QueryInclude] {
+        &self.includes
     }
 
     pub fn limit_value(&self) -> Option<usize> {
@@ -464,52 +480,274 @@ impl<const MAX: usize> IntoQueryValue for &Key<MAX> {
 
 // ── Typed relationship descriptors ────────────────────────────────────────
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThroughRel {
+    pub collection: &'static str,
+    pub local_field: &'static str,
+    pub remote_field: &'static str,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QueryInclude {
+    pub name: &'static str,
+    pub kind: RelationshipKind,
+}
+
 /// A compile-time descriptor for a typed relationship between two models.
 ///
-/// `Rel` captures the attribute ids used on each side of the relationship so
-/// that `populate_parent` / `populate_children` calls are fully type-safe and
-/// self-documenting.
+/// `Rel` captures the relationship name, cardinality, local/remote join keys,
+/// and optional through-collection metadata so that higher-level query/include
+/// APIs can stay typed and self-documenting.
 ///
 /// # Creating a descriptor
 ///
 /// ```rust,ignore
 /// // Many-to-one: Post.author_id → User.id
-/// pub const POST_AUTHOR: Rel<Post, User> = Rel::parent("author_id");
+/// pub const POST_AUTHOR: Rel<Post, User> = Rel::many_to_one("author", "author_id");
 ///
 /// // One-to-many: User.id ← Post.user_id
-/// pub const USER_POSTS: Rel<User, Post> = Rel::children("userId");
+/// pub const USER_POSTS: Rel<User, Post> = Rel::one_to_many("posts", "userId");
 /// ```
 #[derive(Debug, Clone, Copy)]
 pub struct Rel<L, R> {
+    /// Logical relationship name.
+    pub name: &'static str,
+    /// Cardinality/kind of the relationship.
+    pub kind: RelationshipKind,
     /// The attribute id on `L` that participates in the join.
     /// For many-to-one this is the FK column; for one-to-many this is `"id"`.
     pub local_field: &'static str,
     /// The attribute id on `R` that participates in the join.
     /// For many-to-one this is `"id"`; for one-to-many this is the FK column.
     pub remote_field: &'static str,
+    /// Optional join metadata for many-to-many relationships.
+    pub through: Option<ThroughRel>,
     _phantom: std::marker::PhantomData<fn() -> (L, R)>,
 }
 
 impl<L, R> Rel<L, R> {
-    /// Many-to-one: `local_fk` on `L` is a FK pointing to `R`'s primary key.
-    ///
-    /// Example: `Post.author_id → User.id`
-    pub const fn parent(local_fk: &'static str) -> Self {
+    const fn new(
+        name: &'static str,
+        kind: RelationshipKind,
+        local_field: &'static str,
+        remote_field: &'static str,
+        through: Option<ThroughRel>,
+    ) -> Self {
         Self {
-            local_field: local_fk,
-            remote_field: crate::system_fields::FIELD_ID,
+            name,
+            kind,
+            local_field,
+            remote_field,
+            through,
             _phantom: std::marker::PhantomData,
         }
     }
 
-    /// One-to-many: `remote_fk` on `R` is a FK pointing back to `L`'s primary key.
-    ///
-    /// Example: `User.id ← Post.user_id`
-    pub const fn children(remote_fk: &'static str) -> Self {
-        Self {
-            local_field: crate::system_fields::FIELD_ID,
-            remote_field: remote_fk,
-            _phantom: std::marker::PhantomData,
+    pub const fn include(self) -> QueryInclude {
+        QueryInclude {
+            name: self.name,
+            kind: self.kind,
         }
+    }
+
+    pub const fn is_to_one(self) -> bool {
+        matches!(
+            self.kind,
+            RelationshipKind::ManyToOne | RelationshipKind::OneToOne
+        )
+    }
+
+    pub const fn is_to_many(self) -> bool {
+        matches!(
+            self.kind,
+            RelationshipKind::OneToMany | RelationshipKind::ManyToMany
+        )
+    }
+
+    /// Many-to-one: `local_fk` on `L` is a FK pointing to `R`'s primary key.
+    pub const fn many_to_one(name: &'static str, local_fk: &'static str) -> Self {
+        Self::new(
+            name,
+            RelationshipKind::ManyToOne,
+            local_fk,
+            crate::system_fields::FIELD_ID,
+            None,
+        )
+    }
+
+    /// One-to-many: `remote_fk` on `R` is a FK pointing back to `L`'s primary key.
+    pub const fn one_to_many(name: &'static str, remote_fk: &'static str) -> Self {
+        Self::new(
+            name,
+            RelationshipKind::OneToMany,
+            crate::system_fields::FIELD_ID,
+            remote_fk,
+            None,
+        )
+    }
+
+    /// One-to-one using explicit local and remote join keys.
+    pub const fn one_to_one(
+        name: &'static str,
+        local_field: &'static str,
+        remote_field: &'static str,
+    ) -> Self {
+        Self::new(
+            name,
+            RelationshipKind::OneToOne,
+            local_field,
+            remote_field,
+            None,
+        )
+    }
+
+    /// Many-to-many using a through collection/join table.
+    pub const fn many_to_many(
+        name: &'static str,
+        through_collection: &'static str,
+        through_local_field: &'static str,
+        through_remote_field: &'static str,
+    ) -> Self {
+        Self::new(
+            name,
+            RelationshipKind::ManyToMany,
+            crate::system_fields::FIELD_ID,
+            crate::system_fields::FIELD_ID,
+            Some(ThroughRel {
+                collection: through_collection,
+                local_field: through_local_field,
+                remote_field: through_remote_field,
+            }),
+        )
+    }
+
+    /// Backwards-compatible alias for [`Rel::many_to_one`].
+    pub const fn parent(local_fk: &'static str) -> Self {
+        Self::many_to_one(local_fk, local_fk)
+    }
+
+    /// Backwards-compatible alias for [`Rel::one_to_many`].
+    pub const fn children(remote_fk: &'static str) -> Self {
+        Self::one_to_many(remote_fk, remote_fk)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PopulateOne<M, RM>
+where
+    M: Model,
+    RM: Model,
+{
+    pub rel: Rel<M, RM>,
+    pub extract_local_key: fn(&M::Entity) -> Option<String>,
+    pub extract_remote_key: fn(&RM::Entity) -> Option<String>,
+    pub set: fn(&mut M::Entity, RelationOne<RM::Entity>),
+}
+
+impl<M, RM> PopulateOne<M, RM>
+where
+    M: Model,
+    RM: Model,
+{
+    pub const fn new(
+        rel: Rel<M, RM>,
+        extract_local_key: fn(&M::Entity) -> Option<String>,
+        extract_remote_key: fn(&RM::Entity) -> Option<String>,
+        set: fn(&mut M::Entity, RelationOne<RM::Entity>),
+    ) -> Self {
+        Self {
+            rel,
+            extract_local_key,
+            extract_remote_key,
+            set,
+        }
+    }
+
+    pub const fn include(&self) -> QueryInclude {
+        self.rel.include()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PopulateMany<M, RM>
+where
+    M: Model,
+    RM: Model,
+{
+    pub rel: Rel<M, RM>,
+    pub extract_local_key: fn(&M::Entity) -> String,
+    pub extract_remote_key: fn(&RM::Entity) -> Option<String>,
+    pub set: fn(&mut M::Entity, RelationMany<RM::Entity>),
+}
+
+impl<M, RM> PopulateMany<M, RM>
+where
+    M: Model,
+    RM: Model,
+{
+    pub const fn new(
+        rel: Rel<M, RM>,
+        extract_local_key: fn(&M::Entity) -> String,
+        extract_remote_key: fn(&RM::Entity) -> Option<String>,
+        set: fn(&mut M::Entity, RelationMany<RM::Entity>),
+    ) -> Self {
+        Self {
+            rel,
+            extract_local_key,
+            extract_remote_key,
+            set,
+        }
+    }
+
+    pub const fn include(&self) -> QueryInclude {
+        self.rel.include()
+    }
+}
+
+impl<L, R> From<Rel<L, R>> for QueryInclude {
+    fn from(value: Rel<L, R>) -> Self {
+        value.include()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{QuerySpec, Rel};
+    use crate::RelationshipKind;
+
+    #[derive(Debug, Clone, Copy)]
+    struct User;
+
+    #[derive(Debug, Clone, Copy)]
+    struct Post;
+
+    #[test]
+    fn query_spec_tracks_includes() {
+        let rel = Rel::<Post, User>::many_to_one("author", "authorId");
+        let query = QuerySpec::new().include(rel);
+
+        assert_eq!(query.includes().len(), 1);
+        assert_eq!(query.includes()[0].name, "author");
+        assert_eq!(query.includes()[0].kind, RelationshipKind::ManyToOne);
+    }
+
+    #[test]
+    fn rel_constructors_capture_cardinality() {
+        let author = Rel::<Post, User>::many_to_one("author", "authorId");
+        assert!(author.is_to_one());
+        assert_eq!(author.remote_field, crate::FIELD_ID);
+
+        let posts = Rel::<User, Post>::one_to_many("posts", "userId");
+        assert!(posts.is_to_many());
+        assert_eq!(posts.local_field, crate::FIELD_ID);
+
+        let memberships =
+            Rel::<User, Post>::many_to_many("roles", "user_roles", "userId", "roleId");
+        assert!(memberships.is_to_many());
+        assert_eq!(memberships.kind, RelationshipKind::ManyToMany);
+        assert_eq!(
+            memberships.through.expect("through").collection,
+            "user_roles"
+        );
     }
 }

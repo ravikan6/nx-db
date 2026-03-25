@@ -5,7 +5,13 @@
 #[allow(unused_imports)]
 pub mod prod_models {
     use nx_db::traits::storage::StorageRecord;
-    use nx_db::{insert_value, take_optional, take_required, get_optional, get_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, Field, Key, Model, Patch, QuerySpec, RelationshipKind, RelationshipSchema, RelationshipSide, StaticRegistry, FIELD_ID, FIELD_SEQUENCE, FIELD_CREATED_AT, FIELD_UPDATED_AT, FIELD_PERMISSIONS};
+    use nx_db::{
+        AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context,
+        DatabaseError, FIELD_CREATED_AT, FIELD_ID, FIELD_PERMISSIONS, FIELD_SEQUENCE,
+        FIELD_UPDATED_AT, Field, Key, Model, Patch, QuerySpec, RelationshipKind,
+        RelationshipSchema, RelationshipSide, StaticRegistry, get_optional, get_required,
+        insert_value, take_optional, take_required,
+    };
 
     pub type UserId = Key<48>;
 
@@ -15,6 +21,7 @@ pub mod prod_models {
         pub name: String,
         pub email: String,
         pub metadata: Option<String>,
+        pub posts: nx_db::RelationMany<PostEntity>,
         pub _metadata: nx_db::Metadata,
     }
 
@@ -45,6 +52,24 @@ pub mod prod_models {
     pub const USER_NAME: Field<User, String> = Field::new("name");
     pub const USER_EMAIL: Field<User, String> = Field::new("email");
     pub const USER_METADATA: Field<User, Option<String>> = Field::new("metadata");
+    pub const USER_POSTS_REL: nx_db::Rel<User, Post> =
+        nx_db::Rel::<User, Post>::one_to_many("posts", "author");
+    fn populate_user_posts_local_key(entity: &UserEntity) -> String {
+        entity.id.to_string()
+    }
+    fn populate_user_posts_remote_key(entity: &PostEntity) -> Option<String> {
+        Some(entity.author.clone())
+    }
+    fn populate_user_posts_set(entity: &mut UserEntity, value: nx_db::RelationMany<PostEntity>) {
+        entity.posts = value;
+    }
+    pub const USER_POSTS_POPULATE: nx_db::core::PopulateMany<User, Post> =
+        nx_db::core::PopulateMany::new(
+            USER_POSTS_REL,
+            populate_user_posts_local_key,
+            populate_user_posts_remote_key,
+            populate_user_posts_set,
+        );
 
     const USERS_ATTRIBUTES: &[AttributeSchema] = &[
         AttributeSchema {
@@ -83,23 +108,51 @@ pub mod prod_models {
             filters: &[],
             relationship: None,
         },
-    ];
-    const USERS_INDEXES: &[nx_db::IndexSchema] = &[
-        nx_db::IndexSchema {
-            id: "users_email_unique",
-            kind: nx_db::IndexKind::Unique,
-            attributes: &["email"],
-            orders: &[],
+        AttributeSchema {
+            id: "posts",
+            column: "",
+            kind: AttributeKind::Relationship,
+            required: false,
+            array: false,
+            length: None,
+            default: None,
+            persistence: AttributePersistence::Virtual,
+            filters: &[],
+            relationship: Some(nx_db::RelationshipSchema {
+                related_collection: "posts",
+                kind: nx_db::RelationshipKind::OneToMany,
+                side: nx_db::RelationshipSide::Parent,
+                two_way: true,
+                two_way_key: Some("author"),
+                through_collection: None,
+                through_local_field: None,
+                through_remote_field: None,
+                on_delete: nx_db::OnDeleteAction::Restrict,
+            }),
         },
     ];
-    pub static USERS_SCHEMA: CollectionSchema = CollectionSchema { id: "users", name: "Users", document_security: true, enabled: true, permissions: &["read(\"any\")", "create(\"any\")"], attributes: USERS_ATTRIBUTES, indexes: USERS_INDEXES };
+    const USERS_INDEXES: &[nx_db::IndexSchema] = &[nx_db::IndexSchema {
+        id: "users_email_unique",
+        kind: nx_db::IndexKind::Unique,
+        attributes: &["email"],
+        orders: &[],
+    }];
+    pub static USERS_SCHEMA: CollectionSchema = CollectionSchema {
+        id: "users",
+        name: "Users",
+        document_security: true,
+        enabled: true,
+        permissions: &["read(\"any\")", "create(\"any\")"],
+        attributes: USERS_ATTRIBUTES,
+        indexes: USERS_INDEXES,
+    };
     impl User {
         pub const ID: Field<User, UserId> = Field::new(FIELD_ID);
         pub const NAME: Field<User, String> = Field::new("name");
         pub const EMAIL: Field<User, String> = Field::new("email");
         pub const METADATA: Field<User, Option<String>> = Field::new("metadata");
     }
-    nx_db::impl_model! { name: User, id: UserId, entity: UserEntity, create: CreateUser, update: UpdateUser, schema: USERS_SCHEMA, fields: {                 "name" => name : String :required,                 "email" => email : String :required,                 "metadata" => metadata : Option<String> } }
+    nx_db::impl_model! { name: User, id: UserId, entity: UserEntity, create: CreateUser, update: UpdateUser, schema: USERS_SCHEMA, fields: {                 "name" => name : String :required,                 "email" => email : String :required,                 "metadata" => metadata : Option<String> }, loaded_many: { posts } }
     pub type PostId = Key<48>;
 
     #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
@@ -108,6 +161,7 @@ pub mod prod_models {
         pub title: String,
         pub content: Option<String>,
         pub author: String,
+        pub author_rel: nx_db::RelationOne<UserEntity>,
         pub _metadata: nx_db::Metadata,
     }
 
@@ -138,6 +192,24 @@ pub mod prod_models {
     pub const POST_TITLE: Field<Post, String> = Field::new("title");
     pub const POST_CONTENT: Field<Post, Option<String>> = Field::new("content");
     pub const POST_AUTHOR: Field<Post, String> = Field::new("author");
+    pub const POST_AUTHOR_REL: nx_db::Rel<Post, User> =
+        nx_db::Rel::<Post, User>::many_to_one("author", "author");
+    fn populate_post_author_local_key(entity: &PostEntity) -> Option<String> {
+        Some(entity.author.clone())
+    }
+    fn populate_post_author_remote_key(entity: &UserEntity) -> Option<String> {
+        Some(entity.id.to_string())
+    }
+    fn populate_post_author_set(entity: &mut PostEntity, value: nx_db::RelationOne<UserEntity>) {
+        entity.author_rel = value;
+    }
+    pub const POST_AUTHOR_POPULATE: nx_db::core::PopulateOne<Post, User> =
+        nx_db::core::PopulateOne::new(
+            POST_AUTHOR_REL,
+            populate_post_author_local_key,
+            populate_post_author_remote_key,
+            populate_post_author_set,
+        );
 
     const POSTS_ATTRIBUTES: &[AttributeSchema] = &[
         AttributeSchema {
@@ -180,31 +252,39 @@ pub mod prod_models {
                 side: nx_db::RelationshipSide::Parent,
                 two_way: false,
                 two_way_key: None,
+                through_collection: None,
+                through_local_field: None,
+                through_remote_field: None,
                 on_delete: nx_db::OnDeleteAction::Restrict,
             }),
         },
     ];
-    const POSTS_INDEXES: &[nx_db::IndexSchema] = &[
-        nx_db::IndexSchema {
-            id: "full_text_content",
-            kind: nx_db::IndexKind::FullText,
-            attributes: &["content"],
-            orders: &[],
-        },
-    ];
-    pub static POSTS_SCHEMA: CollectionSchema = CollectionSchema { id: "posts", name: "Posts", document_security: true, enabled: true, permissions: &["read(\"any\")", "create(\"any\")"], attributes: POSTS_ATTRIBUTES, indexes: POSTS_INDEXES };
+    const POSTS_INDEXES: &[nx_db::IndexSchema] = &[nx_db::IndexSchema {
+        id: "full_text_content",
+        kind: nx_db::IndexKind::FullText,
+        attributes: &["content"],
+        orders: &[],
+    }];
+    pub static POSTS_SCHEMA: CollectionSchema = CollectionSchema {
+        id: "posts",
+        name: "Posts",
+        document_security: true,
+        enabled: true,
+        permissions: &["read(\"any\")", "create(\"any\")"],
+        attributes: POSTS_ATTRIBUTES,
+        indexes: POSTS_INDEXES,
+    };
     impl Post {
         pub const ID: Field<Post, PostId> = Field::new(FIELD_ID);
         pub const TITLE: Field<Post, String> = Field::new("title");
         pub const CONTENT: Field<Post, Option<String>> = Field::new("content");
         pub const AUTHOR: Field<Post, String> = Field::new("author");
     }
-    nx_db::impl_model! { name: Post, id: PostId, entity: PostEntity, create: CreatePost, update: UpdatePost, schema: POSTS_SCHEMA, fields: {                 "title" => title : String :required,                 "content" => content : Option<String>,                 "author" => author : String :required } }
+    nx_db::impl_model! { name: Post, id: PostId, entity: PostEntity, create: CreatePost, update: UpdatePost, schema: POSTS_SCHEMA, fields: {                 "title" => title : String :required,                 "content" => content : Option<String>,                 "author" => author : String :required }, loaded_one: { author_rel } }
     pub fn registry() -> Result<StaticRegistry, DatabaseError> {
         let registry = StaticRegistry::new()
             .register(&USERS_SCHEMA)?
-            .register(&POSTS_SCHEMA)?
-            ;
+            .register(&POSTS_SCHEMA)?;
         Ok(registry)
     }
 }

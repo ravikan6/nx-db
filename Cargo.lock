@@ -408,6 +408,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "database-derive"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "der"
 version = "0.7.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1100,6 +1109,7 @@ version = "0.1.0"
 dependencies = [
  "database-cache",
  "database-core",
+ "database-derive",
  "driver-postgres",
  "driver-sqlite",
  "serde",

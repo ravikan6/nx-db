@@ -107,6 +107,18 @@ impl PostgresUtils {
         Self::quote_identifier(column)
     }
 
+    pub fn qualified_column_for_field(
+        schema: &'static CollectionSchema,
+        field: &str,
+        alias: Option<&str>,
+    ) -> Result<String, DatabaseError> {
+        let column = Self::column_for_field(schema, field)?;
+        match alias {
+            Some(alias) => Ok(format!("{}.{column}", Self::quote_identifier(alias)?)),
+            None => Ok(column),
+        }
+    }
+
     pub fn select_columns(schema: &'static CollectionSchema) -> Result<String, DatabaseError> {
         let mut columns = vec![
             Self::quote_identifier(COLUMN_SEQUENCE)?,
@@ -117,6 +129,49 @@ impl PostgresUtils {
         ];
         for attr in schema.persisted_attributes() {
             columns.push(Self::quote_identifier(attr.column)?);
+        }
+        Ok(columns.join(", "))
+    }
+
+    pub fn select_columns_for_alias(
+        schema: &'static CollectionSchema,
+        source_alias: &str,
+        result_prefix: &str,
+    ) -> Result<String, DatabaseError> {
+        let source_alias = Self::quote_identifier(source_alias)?;
+        let mut columns = vec![
+            format!(
+                "{source_alias}.{} AS {}",
+                Self::quote_identifier(COLUMN_SEQUENCE)?,
+                Self::quote_identifier(&format!("{result_prefix}__{COLUMN_SEQUENCE}"))?,
+            ),
+            format!(
+                "{source_alias}.{} AS {}",
+                Self::quote_identifier(COLUMN_ID)?,
+                Self::quote_identifier(&format!("{result_prefix}__{COLUMN_ID}"))?,
+            ),
+            format!(
+                "{source_alias}.{} AS {}",
+                Self::quote_identifier(COLUMN_CREATED_AT)?,
+                Self::quote_identifier(&format!("{result_prefix}__{COLUMN_CREATED_AT}"))?,
+            ),
+            format!(
+                "{source_alias}.{} AS {}",
+                Self::quote_identifier(COLUMN_UPDATED_AT)?,
+                Self::quote_identifier(&format!("{result_prefix}__{COLUMN_UPDATED_AT}"))?,
+            ),
+            format!(
+                "{source_alias}.{} AS {}",
+                Self::quote_identifier(COLUMN_PERMISSIONS)?,
+                Self::quote_identifier(&format!("{result_prefix}__{COLUMN_PERMISSIONS}"))?,
+            ),
+        ];
+        for attr in schema.persisted_attributes() {
+            columns.push(format!(
+                "{source_alias}.{} AS {}",
+                Self::quote_identifier(attr.column)?,
+                Self::quote_identifier(&format!("{result_prefix}__{}", attr.column))?,
+            ));
         }
         Ok(columns.join(", "))
     }
@@ -160,22 +215,44 @@ impl PostgresUtils {
         row: &PgRow,
         schema: &'static CollectionSchema,
     ) -> Result<StorageRecord, DatabaseError> {
-        let mut record = StorageRecord::new();
+        Self::row_to_record_internal_prefixed(row, schema, None).map(|record| {
+            record.expect("base records should always be present when decoding postgres rows")
+        })
+    }
 
-        let sequence: i64 = row
-            .try_get(COLUMN_SEQUENCE)
+    pub fn row_to_record_internal_prefixed(
+        row: &PgRow,
+        schema: &'static CollectionSchema,
+        prefix: Option<&str>,
+    ) -> Result<Option<StorageRecord>, DatabaseError> {
+        let mut record = StorageRecord::new();
+        let key = |column: &str| match prefix {
+            Some(prefix) => format!("{prefix}__{column}"),
+            None => column.to_string(),
+        };
+
+        let sequence_column = key(COLUMN_SEQUENCE);
+        let sequence: Option<i64> = row
+            .try_get(sequence_column.as_str())
             .map_err(|e| DatabaseError::Other(format!("postgres sequence read failed: {e}")))?;
+        let Some(sequence) = sequence else {
+            return Ok(None);
+        };
+        let id_column = key(COLUMN_ID);
         let uid: String = row
-            .try_get(COLUMN_ID)
+            .try_get(id_column.as_str())
             .map_err(|e| DatabaseError::Other(format!("postgres id read failed: {e}")))?;
+        let created_column = key(COLUMN_CREATED_AT);
         let created_at: Option<OffsetDateTime> = row
-            .try_get(COLUMN_CREATED_AT)
+            .try_get(created_column.as_str())
             .map_err(|e| DatabaseError::Other(format!("postgres createdAt read failed: {e}")))?;
+        let updated_column = key(COLUMN_UPDATED_AT);
         let updated_at: Option<OffsetDateTime> = row
-            .try_get(COLUMN_UPDATED_AT)
+            .try_get(updated_column.as_str())
             .map_err(|e| DatabaseError::Other(format!("postgres updatedAt read failed: {e}")))?;
+        let permissions_column = key(COLUMN_PERMISSIONS);
         let permissions: Vec<String> = row
-            .try_get(COLUMN_PERMISSIONS)
+            .try_get(permissions_column.as_str())
             .map_err(|e| DatabaseError::Other(format!("postgres permissions read failed: {e}")))?;
 
         record.insert(FIELD_SEQUENCE.to_string(), StorageValue::Int(sequence));
@@ -198,35 +275,36 @@ impl PostgresUtils {
         );
 
         for attr in schema.persisted_attributes() {
-            let key = attr.column;
+            let column = key(attr.column);
+            let column = column.as_str();
             let value = if attr.array {
                 match attr.kind {
                     AttributeKind::String
                     | AttributeKind::Relationship
                     | AttributeKind::Virtual => {
-                        row.try_get::<Option<Vec<String>>, _>(key).map(|v| {
+                        row.try_get::<Option<Vec<String>>, _>(column).map(|v| {
                             v.map(StorageValue::StringArray)
                                 .unwrap_or(StorageValue::Null)
                         })
                     }
                     AttributeKind::Integer => row
-                        .try_get::<Option<Vec<i64>>, _>(key)
+                        .try_get::<Option<Vec<i64>>, _>(column)
                         .map(|v| v.map(StorageValue::IntArray).unwrap_or(StorageValue::Null)),
-                    AttributeKind::Float => row.try_get::<Option<Vec<f64>>, _>(key).map(|v| {
+                    AttributeKind::Float => row.try_get::<Option<Vec<f64>>, _>(column).map(|v| {
                         v.map(StorageValue::FloatArray)
                             .unwrap_or(StorageValue::Null)
                     }),
                     AttributeKind::Boolean => row
-                        .try_get::<Option<Vec<bool>>, _>(key)
+                        .try_get::<Option<Vec<bool>>, _>(column)
                         .map(|v| v.map(StorageValue::BoolArray).unwrap_or(StorageValue::Null)),
                     AttributeKind::Timestamp => row
-                        .try_get::<Option<Vec<OffsetDateTime>>, _>(key)
+                        .try_get::<Option<Vec<OffsetDateTime>>, _>(column)
                         .map(|v: Option<Vec<OffsetDateTime>>| {
                             v.map(StorageValue::TimestampArray)
                                 .unwrap_or(StorageValue::Null)
                         }),
                     AttributeKind::Json => row
-                        .try_get::<Option<Vec<sqlx::types::Json<serde_json::Value>>>, _>(key)
+                        .try_get::<Option<Vec<sqlx::types::Json<serde_json::Value>>>, _>(column)
                         .map(|v| {
                             v.map(|vals| {
                                 StorageValue::StringArray(
@@ -241,24 +319,24 @@ impl PostgresUtils {
                     AttributeKind::String
                     | AttributeKind::Relationship
                     | AttributeKind::Virtual => row
-                        .try_get::<Option<String>, _>(key)
+                        .try_get::<Option<String>, _>(column)
                         .map(|v| v.map(StorageValue::String).unwrap_or(StorageValue::Null)),
                     AttributeKind::Integer => row
-                        .try_get::<Option<i64>, _>(key)
+                        .try_get::<Option<i64>, _>(column)
                         .map(|v| v.map(StorageValue::Int).unwrap_or(StorageValue::Null)),
                     AttributeKind::Float => row
-                        .try_get::<Option<f64>, _>(key)
+                        .try_get::<Option<f64>, _>(column)
                         .map(|v| v.map(StorageValue::Float).unwrap_or(StorageValue::Null)),
                     AttributeKind::Boolean => row
-                        .try_get::<Option<bool>, _>(key)
+                        .try_get::<Option<bool>, _>(column)
                         .map(|v| v.map(StorageValue::Bool).unwrap_or(StorageValue::Null)),
-                    AttributeKind::Timestamp => row.try_get::<Option<OffsetDateTime>, _>(key).map(
-                        |v: Option<OffsetDateTime>| {
+                    AttributeKind::Timestamp => row
+                        .try_get::<Option<OffsetDateTime>, _>(column)
+                        .map(|v: Option<OffsetDateTime>| {
                             v.map(StorageValue::Timestamp).unwrap_or(StorageValue::Null)
-                        },
-                    ),
+                        }),
                     AttributeKind::Json => row
-                        .try_get::<Option<sqlx::types::Json<serde_json::Value>>, _>(key)
+                        .try_get::<Option<sqlx::types::Json<serde_json::Value>>, _>(column)
                         .map(|v| {
                             v.map(|j| StorageValue::Json(j.0.to_string()))
                                 .unwrap_or(StorageValue::Null)
@@ -279,6 +357,6 @@ impl PostgresUtils {
                 }
             }
         }
-        Ok(record)
+        Ok(Some(record))
     }
 }

@@ -171,6 +171,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } => {
                             println!("  - Add column {}.{} ({})", table, column, sql_type);
                         }
+                        nx_db::sqlite::migration::MigrationChange::CreateIndex {
+                            table,
+                            index_id,
+                            ..
+                        } => {
+                            println!("  - Add index {}.{}", table, index_id);
+                        }
                     }
                 }
 

@@ -15,6 +15,16 @@ impl PostgresQuery {
         query: &QuerySpec,
         has_conditions: &mut bool,
     ) -> Result<(), DatabaseError> {
+        Self::push_filters_for_alias(builder, schema, query, None, has_conditions)
+    }
+
+    pub fn push_filters_for_alias(
+        builder: &mut QueryBuilder<'_, Postgres>,
+        schema: &'static CollectionSchema,
+        query: &QuerySpec,
+        alias: Option<&str>,
+        has_conditions: &mut bool,
+    ) -> Result<(), DatabaseError> {
         if query.filters().is_empty() {
             return Ok(());
         }
@@ -25,7 +35,7 @@ impl PostgresQuery {
                 builder.push(" AND ");
             }
             first = false;
-            Self::push_filter(builder, schema, filter)?;
+            Self::push_filter_for_alias(builder, schema, filter, alias)?;
         }
         Ok(())
     }
@@ -47,9 +57,18 @@ impl PostgresQuery {
         schema: &'static CollectionSchema,
         filter: &Filter,
     ) -> Result<(), DatabaseError> {
+        Self::push_filter_for_alias(builder, schema, filter, None)
+    }
+
+    pub fn push_filter_for_alias(
+        builder: &mut QueryBuilder<'_, Postgres>,
+        schema: &'static CollectionSchema,
+        filter: &Filter,
+        alias: Option<&str>,
+    ) -> Result<(), DatabaseError> {
         match filter {
             Filter::Field { field, op } => {
-                let column = PostgresUtils::column_for_field(schema, field)?;
+                let column = PostgresUtils::qualified_column_for_field(schema, field, alias)?;
                 match op {
                     FilterOp::Eq(StorageValue::Null) | FilterOp::IsNull => {
                         builder.push(format!("{column} IS NULL"));
@@ -129,7 +148,7 @@ impl PostgresQuery {
                             builder.push(" AND ");
                         }
                         first = false;
-                        Self::push_filter(builder, schema, f)?;
+                        Self::push_filter_for_alias(builder, schema, f, alias)?;
                     }
                     builder.push(")");
                 }
@@ -145,14 +164,14 @@ impl PostgresQuery {
                             builder.push(" OR ");
                         }
                         first = false;
-                        Self::push_filter(builder, schema, f)?;
+                        Self::push_filter_for_alias(builder, schema, f, alias)?;
                     }
                     builder.push(")");
                 }
             }
             Filter::Not(f) => {
                 builder.push("NOT (");
-                Self::push_filter(builder, schema, f)?;
+                Self::push_filter_for_alias(builder, schema, f, alias)?;
                 builder.push(")");
             }
         }
@@ -255,6 +274,15 @@ impl PostgresQuery {
         schema: &'static CollectionSchema,
         query: &QuerySpec,
     ) -> Result<(), DatabaseError> {
+        Self::push_sorts_for_alias(builder, schema, query, None)
+    }
+
+    pub fn push_sorts_for_alias(
+        builder: &mut QueryBuilder<'_, Postgres>,
+        schema: &'static CollectionSchema,
+        query: &QuerySpec,
+        alias: Option<&str>,
+    ) -> Result<(), DatabaseError> {
         if query.sorts().is_empty() {
             return Ok(());
         }
@@ -265,7 +293,7 @@ impl PostgresQuery {
                 builder.push(", ");
             }
             first = false;
-            let column = PostgresUtils::column_for_field(schema, &sort.field)?;
+            let column = PostgresUtils::qualified_column_for_field(schema, sort.field, alias)?;
             let direction = match sort.direction {
                 SortDirection::Asc => "ASC",
                 SortDirection::Desc => "DESC",
@@ -345,14 +373,29 @@ impl PostgresQuery {
         action: PermissionEnum,
         has_conditions: &mut bool,
     ) -> Result<(), DatabaseError> {
+        if Self::document_action_roles(context, schema, action)?.is_none() {
+            return Ok(());
+        }
+        Self::push_condition_separator(builder, has_conditions);
+        Self::push_document_action_expression(builder, context, schema, alias, action)?;
+        Ok(())
+    }
+
+    pub fn push_document_action_expression(
+        builder: &mut QueryBuilder<'_, Postgres>,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        alias: &str,
+        action: PermissionEnum,
+    ) -> Result<(), DatabaseError> {
         let Some(roles) = Self::document_action_roles(context, schema, action)? else {
+            builder.push("TRUE");
             return Ok(());
         };
         let perms_table = PostgresUtils::qualified_permissions_table_name(context, schema.id)?;
         let alias_quoted = PostgresUtils::quote_identifier(alias)?;
         let seq_col = PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?;
 
-        Self::push_condition_separator(builder, has_conditions);
         builder.push("EXISTS (SELECT 1 FROM ");
         builder.push(perms_table);
         builder.push(" AS p WHERE p.document_id = ");

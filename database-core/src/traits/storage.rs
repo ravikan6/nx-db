@@ -1,4 +1,5 @@
 use crate::context::Context;
+use crate::enums::RelationshipKind;
 use crate::errors::DatabaseError;
 use crate::query::QuerySpec;
 use crate::schema::CollectionSchema;
@@ -58,6 +59,40 @@ impl StorageValue {
 }
 
 pub type StorageRecord = BTreeMap<String, StorageValue>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageThroughRelation {
+    pub schema: &'static CollectionSchema,
+    pub local_field: &'static str,
+    pub remote_field: &'static str,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StorageRelation {
+    pub kind: RelationshipKind,
+    pub local_field: &'static str,
+    pub remote_field: &'static str,
+    pub through: Option<StorageThroughRelation>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct JoinedStorageRecord {
+    pub base: StorageRecord,
+    pub related: Option<StorageRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StoragePopulate {
+    pub name: &'static str,
+    pub schema: &'static CollectionSchema,
+    pub relation: StorageRelation,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PopulatedStorageRow {
+    pub base: StorageRecord,
+    pub related: BTreeMap<String, Option<StorageRecord>>,
+}
 
 pub trait StorageAdapter: Send + Sync {
     fn enforces_document_filtering(&self, _action: PermissionEnum) -> bool {
@@ -129,6 +164,29 @@ pub trait StorageAdapter: Send + Sync {
         schema: &'static CollectionSchema,
         query: &QuerySpec,
     ) -> AdapterFuture<'_, Result<Vec<StorageRecord>, DatabaseError>>;
+
+    fn find_related(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        related_schema: &'static CollectionSchema,
+        query: &QuerySpec,
+        relation: StorageRelation,
+    ) -> AdapterFuture<'_, Result<Option<Vec<JoinedStorageRecord>>, DatabaseError>> {
+        let _ = (context, schema, related_schema, query, relation);
+        Box::pin(async { Ok(None) })
+    }
+
+    fn find_populated(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        query: &QuerySpec,
+        populates: Vec<StoragePopulate>,
+    ) -> AdapterFuture<'_, Result<Option<Vec<PopulatedStorageRow>>, DatabaseError>> {
+        let _ = (context, schema, query, populates);
+        Box::pin(async { Ok(None) })
+    }
 
     fn count(
         &self,

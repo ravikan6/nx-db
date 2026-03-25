@@ -29,6 +29,32 @@ pub struct Metadata {
     pub permissions: Vec<String>,
 }
 
+pub trait EntityRecord: Clone + Send + Sync + 'static {
+    type Id: AsRef<str> + Clone + Send + Sync + 'static;
+
+    fn entity_to_id(entity: &Self) -> &Self::Id;
+    fn entity_metadata(entity: &Self) -> &Metadata;
+
+    fn from_record(record: StorageRecord, context: &Context) -> Result<Self, DatabaseError>;
+
+    fn resolve_entity<'a>(
+        entity: Self,
+        _context: &'a Context,
+    ) -> ModelFuture<'a, Result<Self, DatabaseError>> {
+        Box::pin(async move { Ok(entity) })
+    }
+}
+
+pub trait CreateRecord: Send + Sync + 'static {
+    type Id: crate::GenerateId + AsRef<str> + Clone + Send + Sync + 'static;
+
+    fn create_to_record(self, context: &Context) -> Result<StorageRecord, DatabaseError>;
+}
+
+pub trait UpdateRecord: Send + Sync + 'static {
+    fn update_to_record(self, context: &Context) -> Result<StorageRecord, DatabaseError>;
+}
+
 pub trait Model: Copy + Send + Sync + 'static {
     type Id: AsRef<str> + Clone + Send + Sync + 'static;
     type Entity: Clone + Send + Sync + 'static;

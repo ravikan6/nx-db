@@ -1,10 +1,10 @@
 use crate::driver::SqliteAdapter;
 use crate::utils::SqliteUtils;
 use database_core::errors::DatabaseError;
-use database_core::traits::migration::MigrationCollection;
+use database_core::traits::migration::{MigrationCollection, MigrationIndex};
 use database_core::{
     AttributePersistence, COLUMN_CREATED_AT, COLUMN_ID, COLUMN_PERMISSIONS, COLUMN_SEQUENCE,
-    COLUMN_UPDATED_AT, Context,
+    COLUMN_UPDATED_AT, Context, IndexKind, Order,
 };
 use sqlx::{Executor, Pool, Row, Sqlite};
 use std::collections::BTreeMap;
@@ -16,6 +16,11 @@ pub enum MigrationChange {
         column: String,
         sql_type: String,
         required: bool,
+    },
+    CreateIndex {
+        table: String,
+        index_id: String,
+        sql: String,
     },
 }
 
@@ -101,6 +106,54 @@ impl<'a> MigrationEngine<'a> {
                     required: attr.required,
                 });
             }
+        }
+
+        let existing_indexes: Vec<String> = sqlx::query(&format!(
+            "PRAGMA index_list({})",
+            SqliteUtils::quote_identifier(table_name)
+        ))
+        .fetch_all(self.pool)
+        .await
+        .map_err(|e| DatabaseError::Other(format!("failed to fetch indexes: {e}")))?
+        .into_iter()
+        .map(|row| row.get::<String, _>(1))
+        .collect();
+        let existing_index_map: BTreeMap<String, bool> = existing_indexes
+            .into_iter()
+            .map(|index| (index, true))
+            .collect();
+
+        for index in collection.indexes() {
+            if existing_index_map.contains_key(&index.id) {
+                continue;
+            }
+
+            let sql = match index.kind {
+                IndexKind::Key | IndexKind::FullText => format!(
+                    "CREATE INDEX IF NOT EXISTS {} ON {} ({})",
+                    SqliteUtils::quote_identifier(&index.id),
+                    SqliteUtils::quote_identifier(table_name),
+                    self.quoted_column_list_generic(collection, &index)?
+                ),
+                IndexKind::Unique => format!(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({})",
+                    SqliteUtils::quote_identifier(&index.id),
+                    SqliteUtils::quote_identifier(table_name),
+                    self.quoted_column_list_generic(collection, &index)?
+                ),
+                IndexKind::Spatial => {
+                    return Err(DatabaseError::Other(format!(
+                        "collection '{}': sqlite adapter does not support spatial indexes",
+                        collection.id()
+                    )));
+                }
+            };
+
+            changes.push(MigrationChange::CreateIndex {
+                table: table_name.to_string(),
+                index_id: index.id.clone(),
+                sql,
+            });
         }
 
         Ok(changes)
@@ -192,6 +245,44 @@ impl<'a> MigrationEngine<'a> {
                     .map_err(|e| DatabaseError::Other(e.to_string()))?;
                 Ok(())
             }
+            MigrationChange::CreateIndex { sql, .. } => {
+                self.pool
+                    .execute(sql.as_str())
+                    .await
+                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
+                Ok(())
+            }
         }
+    }
+
+    fn quoted_column_list_generic(
+        &self,
+        collection: &dyn MigrationCollection,
+        index: &MigrationIndex,
+    ) -> Result<String, DatabaseError> {
+        let mut out = Vec::with_capacity(index.attributes.len());
+        for (i, attribute_id) in index.attributes.iter().enumerate() {
+            let attr = collection
+                .attributes()
+                .into_iter()
+                .find(|a| a.id == *attribute_id)
+                .ok_or_else(|| {
+                    DatabaseError::Other(format!(
+                        "index references unknown attribute '{}.{}'",
+                        collection.id(),
+                        attribute_id
+                    ))
+                })?;
+            let mut column = SqliteUtils::quote_identifier(&attr.column);
+            if let Some(order) = index.orders.get(i) {
+                match order {
+                    Order::Asc => column.push_str(" ASC"),
+                    Order::Desc => column.push_str(" DESC"),
+                    Order::None => {}
+                }
+            }
+            out.push(column);
+        }
+        Ok(out.join(", "))
     }
 }

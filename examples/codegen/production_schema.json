@@ -10,7 +10,18 @@
       "attributes": [
         { "id": "name", "kind": "string", "required": true },
         { "id": "email", "kind": "string", "required": true },
-        { "id": "metadata", "kind": "json" }
+        { "id": "metadata", "kind": "json" },
+        {
+          "id": "posts",
+          "kind": "relationship",
+          "relationship": {
+            "relatedCollection": "posts",
+            "kind": "onetomany",
+            "side": "parent",
+            "twoWay": true,
+            "twoWayKey": "author"
+          }
+        }
       ],
       "indexes": [
         {

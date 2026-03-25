@@ -101,6 +101,18 @@ A collection schema describes:
 
 Each attribute is defined statically. Persisted attributes map to real Postgres columns. Virtual attributes are resolved by the runtime and are not stored directly.
 
+### Relationships
+
+Relationship metadata should be first-class in the public API, not just schema decoration.
+
+The current direction is:
+
+- typed relation descriptors (`Rel<Model, Related>`) are generated when enough metadata exists
+- queries can carry relation include metadata via `QuerySpec::include(...)`
+- repositories expose relation-driven helpers like `find_including_one(...)` and `find_including_many(...)`
+
+The first implementation still uses batched follow-up queries internally. The API should stay stable if adapters later upgrade those plans into real SQL joins.
+
 ### Registry
 
 The registry owns all known static collections for a process.

@@ -116,6 +116,33 @@ impl CollectionSchema {
                     self.id, attribute.id
                 )));
             }
+
+            if let Some(relationship) = attribute.relationship {
+                match relationship.kind {
+                    RelationshipKind::ManyToMany => {
+                        if relationship.through_collection.is_none()
+                            || relationship.through_local_field.is_none()
+                            || relationship.through_remote_field.is_none()
+                        {
+                            return Err(DatabaseError::Other(format!(
+                                "attribute '{}.{}' is many-to-many but missing through metadata",
+                                self.id, attribute.id
+                            )));
+                        }
+                    }
+                    _ => {
+                        if relationship.through_collection.is_some()
+                            || relationship.through_local_field.is_some()
+                            || relationship.through_remote_field.is_some()
+                        {
+                            return Err(DatabaseError::Other(format!(
+                                "attribute '{}.{}' declares through metadata for a non-many-to-many relationship",
+                                self.id, attribute.id
+                            )));
+                        }
+                    }
+                }
+            }
         }
 
         let mut index_ids = BTreeSet::new();
@@ -208,6 +235,9 @@ pub struct RelationshipSchema {
     pub side: RelationshipSide,
     pub two_way: bool,
     pub two_way_key: Option<&'static str>,
+    pub through_collection: Option<&'static str>,
+    pub through_local_field: Option<&'static str>,
+    pub through_remote_field: Option<&'static str>,
     pub on_delete: OnDeleteAction,
 }
 
@@ -304,6 +334,9 @@ mod tests {
                 side: RelationshipSide::Parent,
                 two_way: false,
                 two_way_key: None,
+                through_collection: None,
+                through_local_field: None,
+                through_remote_field: None,
                 on_delete: OnDeleteAction::Restrict,
             }),
         },

@@ -19,6 +19,10 @@ include!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/examples/codegen/virtual_models.rs"
 ));
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/examples/codegen/production_models.rs"
+));
 
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct DisplayName(String);
@@ -634,4 +638,58 @@ fn generated_virtual_models_resolve_after_reads_and_reject_virtual_queries() {
             .to_string()
             .contains("virtual field 'profileLabel' cannot be used in filters")
     );
+}
+
+#[test]
+fn generated_relation_constants_work_with_relation_driven_repository_api() {
+    let registry = prod_models::registry().expect("registry should build");
+    let database = Database::new(FakeAdapter::default(), registry);
+    let user_repo = database.repo::<prod_models::User>();
+    let post_repo = database.repo::<prod_models::Post>();
+
+    let user = block_on(user_repo.insert(prod_models::CreateUser::builder(
+        "Ravi".into(),
+        "ravi@example.com".into(),
+    )))
+    .expect("user insert should succeed");
+
+    block_on(post_repo.insert(prod_models::CreatePost::builder(
+        "Hello".into(),
+        user.id.to_string(),
+    )))
+    .expect("post insert should succeed");
+
+    let posts = block_on(
+        post_repo
+            .query()
+            .populate(prod_models::POST_AUTHOR_POPULATE)
+            .all(),
+    )
+    .expect("find including relation should succeed");
+
+    assert_eq!(posts.len(), 1);
+    assert_eq!(prod_models::POST_AUTHOR_REL.name, "author");
+    assert!(posts[0].author_rel.is_loaded());
+    assert!(
+        QuerySpec::new()
+            .include(prod_models::POST_AUTHOR_REL)
+            .includes()
+            .iter()
+            .any(|include| include.name == "author")
+    );
+
+    let users = block_on(
+        user_repo
+            .query()
+            .populate(prod_models::USER_POSTS_POPULATE)
+            .all(),
+    )
+    .expect("find including reverse relation should succeed");
+
+    assert_eq!(users.len(), 1);
+    let loaded_posts = users[0]
+        .posts
+        .as_slice()
+        .expect("posts relation should be loaded");
+    assert_eq!(loaded_posts.len(), 1);
 }

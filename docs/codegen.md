@@ -104,6 +104,7 @@ The generated module currently produces:
 - typed ids using `Key<N>`
 - entity/create/update structs
 - typed query fields
+- typed relation constants such as `POST_AUTHOR_REL` when relationship metadata is available
 - static `CollectionSchema`
 - static `IndexSchema` metadata
 - a `registry()` function for startup wiring

@@ -21,7 +21,7 @@ pub use context::Context;
 
 // ── Database & repository ────────────────────────────────────────────────────
 pub use database::{Database, DatabaseBuilder};
-pub use repository::{Repository, ScopedDatabase};
+pub use repository::{PopulateDescriptor, Repository, RepositoryQuery, ScopedDatabase};
 
 // ── Schema types ─────────────────────────────────────────────────────────────
 pub use schema::{
@@ -47,11 +47,12 @@ pub use events::{Event, EventBus, NoopEventBus};
 pub use key::{GENERATED_ID_MIN_LENGTH, GenerateId, Key, generate_id_string};
 
 // ── Model ─────────────────────────────────────────────────────────────────────
-pub use model::{Metadata, Model, ModelFuture};
+pub use model::{CreateRecord, EntityRecord, Metadata, Model, ModelFuture, UpdateRecord};
 
 // ── Query ─────────────────────────────────────────────────────────────────────
 pub use query::{
-    EncodedField, Field, Filter, FilterOp, IntoQueryValue, QuerySpec, Rel, Sort, SortDirection,
+    EncodedField, Field, Filter, FilterOp, IntoQueryValue, PopulateMany, PopulateOne, QueryInclude,
+    QuerySpec, Rel, Sort, SortDirection, ThroughRel,
 };
 
 // ── Registry ──────────────────────────────────────────────────────────────────
@@ -71,8 +72,8 @@ pub use utils::{
 
 // ── Value helpers ─────────────────────────────────────────────────────────────
 pub use value::{
-    FromStorage, IntoStorage, Patch, Populated, get_optional, get_required, insert_value,
-    take_optional, take_required,
+    FromStorage, IntoStorage, Patch, Populated, RelationMany, RelationOne, get_optional,
+    get_required, insert_value, take_optional, take_required,
 };
 
 // ── Re-export the `time` crate so downstream crates don't need to add it.

@@ -2,11 +2,7 @@ use crate::utils::SqliteUtils;
 use database_core::errors::DatabaseError;
 use database_core::query::{Filter, FilterOp};
 use database_core::traits::storage::StorageValue;
-use database_core::{
-    COLUMN_CREATED_AT, COLUMN_ID, COLUMN_PERMISSIONS, COLUMN_SEQUENCE, COLUMN_UPDATED_AT,
-    CollectionSchema, FIELD_CREATED_AT, FIELD_ID, FIELD_PERMISSIONS, FIELD_SEQUENCE,
-    FIELD_UPDATED_AT,
-};
+use database_core::{COLUMN_SEQUENCE, CollectionSchema};
 use sqlx::{QueryBuilder, Sqlite};
 
 pub struct SqliteQuery;
@@ -122,20 +118,18 @@ impl SqliteQuery {
         schema: &'static CollectionSchema,
         filter: &Filter,
     ) -> Result<(), DatabaseError> {
+        Self::push_filter_for_alias(builder, schema, filter, None)
+    }
+
+    pub fn push_filter_for_alias(
+        builder: &mut QueryBuilder<'_, Sqlite>,
+        schema: &'static CollectionSchema,
+        filter: &Filter,
+        alias: Option<&str>,
+    ) -> Result<(), DatabaseError> {
         match filter {
             Filter::Field { field, op } => {
-                let column = if let Some(attr) = schema.attribute(field) {
-                    SqliteUtils::quote_identifier(attr.column)
-                } else {
-                    match *field {
-                        FIELD_ID => COLUMN_ID.to_string(),
-                        FIELD_SEQUENCE => COLUMN_SEQUENCE.to_string(),
-                        FIELD_CREATED_AT => COLUMN_CREATED_AT.to_string(),
-                        FIELD_UPDATED_AT => COLUMN_UPDATED_AT.to_string(),
-                        FIELD_PERMISSIONS => COLUMN_PERMISSIONS.to_string(),
-                        _ => return Err(DatabaseError::Other(format!("unknown field {field}"))),
-                    }
-                };
+                let column = SqliteUtils::qualified_column_for_field(schema, field, alias)?;
 
                 match op {
                     FilterOp::Eq(StorageValue::Null) | FilterOp::IsNull => {
@@ -189,6 +183,35 @@ impl SqliteQuery {
                         Self::push_bind_value(builder, v);
                         builder.push(" || '%'");
                     }
+                    FilterOp::StartsWith(v) => {
+                        builder.push(format!("{column} LIKE "));
+                        Self::push_bind_value(builder, v);
+                        builder.push(" || '%'");
+                    }
+                    FilterOp::EndsWith(v) => {
+                        builder.push(format!("{column} LIKE '%' || "));
+                        Self::push_bind_value(builder, v);
+                    }
+                    FilterOp::TextSearch(StorageValue::String(value))
+                    | FilterOp::TextSearch(StorageValue::Json(value)) => {
+                        let terms: Vec<&str> = value.split_whitespace().collect();
+                        if terms.is_empty() {
+                            builder.push("1 = 1");
+                        } else {
+                            builder.push("(");
+                            let mut first = true;
+                            for term in terms {
+                                if !first {
+                                    builder.push(" AND ");
+                                }
+                                first = false;
+                                builder.push(format!("{column} LIKE '%' || "));
+                                builder.push_bind(term.to_string());
+                                builder.push(" || '%'");
+                            }
+                            builder.push(")");
+                        }
+                    }
                     _ => {
                         return Err(DatabaseError::Other(
                             "unsupported filter op for sqlite".into(),
@@ -207,7 +230,7 @@ impl SqliteQuery {
                             builder.push(" AND ");
                         }
                         first = false;
-                        Self::push_filter(builder, schema, f)?;
+                        Self::push_filter_for_alias(builder, schema, f, alias)?;
                     }
                     builder.push(")");
                 }
@@ -223,14 +246,14 @@ impl SqliteQuery {
                             builder.push(" OR ");
                         }
                         first = false;
-                        Self::push_filter(builder, schema, f)?;
+                        Self::push_filter_for_alias(builder, schema, f, alias)?;
                     }
                     builder.push(")");
                 }
             }
             Filter::Not(f) => {
                 builder.push("NOT (");
-                Self::push_filter(builder, schema, f)?;
+                Self::push_filter_for_alias(builder, schema, f, alias)?;
                 builder.push(")");
             }
         }
@@ -330,13 +353,28 @@ impl SqliteQuery {
         action: database_core::utils::PermissionEnum,
         has_conditions: &mut bool,
     ) -> Result<(), DatabaseError> {
+        if Self::document_action_roles(context, schema, action)?.is_none() {
+            return Ok(());
+        }
+        Self::push_condition_separator(builder, has_conditions);
+        Self::push_document_action_expression(builder, context, schema, alias, action)?;
+        Ok(())
+    }
+
+    pub fn push_document_action_expression(
+        builder: &mut QueryBuilder<'_, Sqlite>,
+        context: &database_core::Context,
+        schema: &'static CollectionSchema,
+        alias: &str,
+        action: database_core::utils::PermissionEnum,
+    ) -> Result<(), DatabaseError> {
         let Some(roles) = Self::document_action_roles(context, schema, action)? else {
+            builder.push("1 = 1");
             return Ok(());
         };
         let perms_table = SqliteUtils::qualified_permissions_table_name(context, schema.id);
         let alias_quoted = SqliteUtils::quote_identifier(alias);
 
-        Self::push_condition_separator(builder, has_conditions);
         builder.push("EXISTS (SELECT 1 FROM ");
         builder.push(perms_table);
         builder.push(" AS p WHERE p.document_id = ");

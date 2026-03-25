@@ -1,10 +1,14 @@
 use database_core::errors::DatabaseError;
 use database_core::query::{QuerySpec, SortDirection};
-use database_core::traits::storage::{AdapterFuture, StorageAdapter, StorageRecord, StorageValue};
+use database_core::traits::storage::{
+    AdapterFuture, JoinedStorageRecord, PopulatedStorageRow, StorageAdapter, StoragePopulate,
+    StorageRecord, StorageRelation, StorageValue,
+};
 use database_core::utils::PermissionEnum;
 use database_core::{
-    COLUMN_ID, COLUMN_SEQUENCE, CollectionSchema, Context, FIELD_CREATED_AT, FIELD_ID,
-    FIELD_PERMISSIONS, FIELD_SEQUENCE, FIELD_UPDATED_AT,
+    COLUMN_CREATED_AT, COLUMN_ID, COLUMN_SEQUENCE, COLUMN_UPDATED_AT, CollectionSchema, Context,
+    FIELD_CREATED_AT, FIELD_ID, FIELD_PERMISSIONS, FIELD_SEQUENCE, FIELD_UPDATED_AT,
+    RelationshipKind,
 };
 use sqlx::{Pool, QueryBuilder, Row, Sqlite};
 
@@ -109,6 +113,75 @@ impl StorageAdapter for SqliteAdapter {
                 .execute(&pool)
                 .await
                 .map_err(|e| DatabaseError::Other(e.to_string()))?;
+
+            let internal_indexes = [
+                format!(
+                    "CREATE INDEX IF NOT EXISTS {} ON {table} ({})",
+                    SqliteUtils::quote_identifier(&format!("{}_created_at", schema.id)),
+                    SqliteUtils::quote_identifier(COLUMN_CREATED_AT),
+                ),
+                format!(
+                    "CREATE INDEX IF NOT EXISTS {} ON {table} ({})",
+                    SqliteUtils::quote_identifier(&format!("{}_updated_at", schema.id)),
+                    SqliteUtils::quote_identifier(COLUMN_UPDATED_AT),
+                ),
+                format!(
+                    "CREATE INDEX IF NOT EXISTS {} ON {perms_table} (permission_type)",
+                    SqliteUtils::quote_identifier(&format!(
+                        "{}_perms_permission_type_idx",
+                        schema.id
+                    )),
+                ),
+                format!(
+                    "CREATE INDEX IF NOT EXISTS {} ON {perms_table} (document_id)",
+                    SqliteUtils::quote_identifier(&format!("{}_perms_document_id_idx", schema.id)),
+                ),
+            ];
+            for statement in internal_indexes {
+                sqlx::query(&statement)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            }
+
+            for index in schema.indexes {
+                let index_name = SqliteUtils::quote_identifier(index.id);
+                let mut col_parts = Vec::with_capacity(index.attributes.len());
+                for (pos, attr_id) in index.attributes.iter().enumerate() {
+                    let column = SqliteUtils::qualified_column_for_field(schema, attr_id, None)?;
+                    let direction = index
+                        .orders
+                        .get(pos)
+                        .map(|order| match order {
+                            database_core::Order::Asc => " ASC",
+                            database_core::Order::Desc => " DESC",
+                            database_core::Order::None => "",
+                        })
+                        .unwrap_or("");
+                    col_parts.push(format!("{column}{direction}"));
+                }
+                let columns = col_parts.join(", ");
+                let statement = match index.kind {
+                    database_core::IndexKind::Key | database_core::IndexKind::FullText => {
+                        format!("CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({columns})")
+                    }
+                    database_core::IndexKind::Unique => {
+                        format!(
+                            "CREATE UNIQUE INDEX IF NOT EXISTS {index_name} ON {table} ({columns})"
+                        )
+                    }
+                    database_core::IndexKind::Spatial => {
+                        return Err(DatabaseError::Other(format!(
+                            "collection '{}': sqlite driver does not support spatial indexes",
+                            schema.id
+                        )));
+                    }
+                };
+                sqlx::query(&statement)
+                    .execute(&pool)
+                    .await
+                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            }
 
             Ok(())
         })
@@ -313,7 +386,7 @@ impl StorageAdapter for SqliteAdapter {
                 .begin()
                 .await
                 .map_err(|e| DatabaseError::Other(e.to_string()))?;
-            let mut builder = QueryBuilder::<Sqlite>::new(format!("UPDATE {table} SET "));
+            let mut builder = QueryBuilder::<Sqlite>::new(format!("UPDATE {table} AS main SET "));
             let mut first = true;
 
             let attributes: Vec<_> = schema
@@ -355,20 +428,18 @@ impl StorageAdapter for SqliteAdapter {
                 builder.push_bind(serde_json::to_string(perms).unwrap());
             }
 
-            // SQLite UPDATE doesn't support table aliases in the main SET clause standardly like Postgres,
-            // so we do subquery for document_action_condition or just use standard UPDATE WHERE.
-            // Wait, SQLite UPDATE doesn't support aliases (AS main) in the UPDATE statement directly.
-            // `UPDATE table SET ... WHERE id = ? AND EXISTS (...)`
-
             let mut has_where = false;
             SqliteQuery::push_condition_separator(&mut builder, &mut has_where);
-            builder.push(format!("{} = ", COLUMN_ID));
+            builder.push(format!(
+                "main.{} = ",
+                SqliteUtils::quote_identifier(COLUMN_ID)
+            ));
             builder.push_bind(&id);
             SqliteQuery::push_document_action_condition(
                 &mut builder,
                 &context,
                 schema,
-                &table,
+                "main",
                 PermissionEnum::Update,
                 &mut has_where,
             )?;
@@ -427,7 +498,7 @@ impl StorageAdapter for SqliteAdapter {
         let query = query.clone();
         Box::pin(async move {
             let table = SqliteUtils::qualified_table_name(&context, schema.id);
-            let mut builder = QueryBuilder::<Sqlite>::new(format!("UPDATE {table} SET "));
+            let mut builder = QueryBuilder::<Sqlite>::new(format!("UPDATE {table} AS main SET "));
             let mut first = true;
 
             let attributes: Vec<_> = schema
@@ -462,13 +533,13 @@ impl StorageAdapter for SqliteAdapter {
                 &mut builder,
                 &context,
                 schema,
-                &table,
+                "main",
                 PermissionEnum::Update,
                 &mut has_where,
             )?;
             for f in query.filters() {
                 SqliteQuery::push_condition_separator(&mut builder, &mut has_where);
-                SqliteQuery::push_filter(&mut builder, schema, f)?;
+                SqliteQuery::push_filter_for_alias(&mut builder, schema, f, Some("main"))?;
             }
 
             let res = builder
@@ -491,15 +562,19 @@ impl StorageAdapter for SqliteAdapter {
         let id = id.to_string();
         Box::pin(async move {
             let table = SqliteUtils::qualified_table_name(&context, schema.id);
-            let mut builder = QueryBuilder::<Sqlite>::new(format!("DELETE FROM {table} WHERE "));
-            builder.push(format!("{} = ", COLUMN_ID));
+            let mut builder =
+                QueryBuilder::<Sqlite>::new(format!("DELETE FROM {table} AS main WHERE "));
+            builder.push(format!(
+                "main.{} = ",
+                SqliteUtils::quote_identifier(COLUMN_ID)
+            ));
             builder.push_bind(id);
             let mut has_where = true;
             SqliteQuery::push_document_action_condition(
                 &mut builder,
                 &context,
                 schema,
-                &table,
+                "main",
                 PermissionEnum::Delete,
                 &mut has_where,
             )?;
@@ -523,19 +598,19 @@ impl StorageAdapter for SqliteAdapter {
         let query = query.clone();
         Box::pin(async move {
             let table = SqliteUtils::qualified_table_name(&context, schema.id);
-            let mut builder = QueryBuilder::<Sqlite>::new(format!("DELETE FROM {table}"));
+            let mut builder = QueryBuilder::<Sqlite>::new(format!("DELETE FROM {table} AS main"));
             let mut has_where = false;
             SqliteQuery::push_document_action_condition(
                 &mut builder,
                 &context,
                 schema,
-                &table,
+                "main",
                 PermissionEnum::Delete,
                 &mut has_where,
             )?;
             for f in query.filters() {
                 SqliteQuery::push_condition_separator(&mut builder, &mut has_where);
-                SqliteQuery::push_filter(&mut builder, schema, f)?;
+                SqliteQuery::push_filter_for_alias(&mut builder, schema, f, Some("main"))?;
             }
             let res = builder
                 .build()
@@ -613,6 +688,500 @@ impl StorageAdapter for SqliteAdapter {
                 results.push(SqliteUtils::row_to_record(&r, schema)?);
             }
             Ok(results)
+        })
+    }
+
+    fn find_related(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        related_schema: &'static CollectionSchema,
+        query: &QuerySpec,
+        relation: StorageRelation,
+    ) -> AdapterFuture<'_, Result<Option<Vec<JoinedStorageRecord>>, DatabaseError>> {
+        let pool = self.pool.clone();
+        let context = context.clone();
+        let query = query.clone();
+        Box::pin(async move {
+            let base_table = SqliteUtils::qualified_table_name(&context, schema.id);
+            let related_table = SqliteUtils::qualified_table_name(&context, related_schema.id);
+            let base_select = SqliteUtils::select_columns_for_alias(schema, "main", "base");
+            let related_select =
+                SqliteUtils::select_columns_for_alias(related_schema, "rel", "rel");
+            let use_base_subquery = matches!(
+                relation.kind,
+                RelationshipKind::OneToMany | RelationshipKind::ManyToMany
+            );
+
+            let mut builder = QueryBuilder::<Sqlite>::new(format!(
+                "SELECT {base_select}, {related_select} FROM "
+            ));
+            if use_base_subquery {
+                builder.push("(SELECT ");
+                builder.push(SqliteUtils::select_columns(schema));
+                builder.push(format!(" FROM {base_table} AS main"));
+                let mut has_where = false;
+                SqliteQuery::push_document_action_condition(
+                    &mut builder,
+                    &context,
+                    schema,
+                    "main",
+                    PermissionEnum::Read,
+                    &mut has_where,
+                )?;
+                for filter in query.filters() {
+                    SqliteQuery::push_condition_separator(&mut builder, &mut has_where);
+                    SqliteQuery::push_filter_for_alias(&mut builder, schema, filter, Some("main"))?;
+                }
+                if !query.sorts().is_empty() {
+                    builder.push(" ORDER BY ");
+                    let mut first = true;
+                    for sort in query.sorts() {
+                        if !first {
+                            builder.push(", ");
+                        }
+                        first = false;
+                        let column = SqliteUtils::qualified_column_for_field(
+                            schema,
+                            sort.field,
+                            Some("main"),
+                        )?;
+                        builder.push(column);
+                        match sort.direction {
+                            SortDirection::Asc => builder.push(" ASC"),
+                            SortDirection::Desc => builder.push(" DESC"),
+                        };
+                    }
+                }
+                if let Some(limit) = query.limit_value() {
+                    builder.push(" LIMIT ");
+                    builder.push_bind(limit as i64);
+                }
+                if let Some(offset) = query.offset_value() {
+                    builder.push(" OFFSET ");
+                    builder.push_bind(offset as i64);
+                }
+                builder.push(") AS main ");
+            } else {
+                builder.push(format!("{base_table} AS main "));
+            }
+
+            match relation.kind {
+                RelationshipKind::ManyToOne
+                | RelationshipKind::OneToOne
+                | RelationshipKind::OneToMany => {
+                    let base_join_column = SqliteUtils::qualified_column_for_field(
+                        schema,
+                        relation.local_field,
+                        Some("main"),
+                    )?;
+                    let related_join_column = SqliteUtils::qualified_column_for_field(
+                        related_schema,
+                        relation.remote_field,
+                        Some("rel"),
+                    )?;
+                    builder.push(format!(
+                        "LEFT JOIN {related_table} AS rel ON {base_join_column} = {related_join_column} AND "
+                    ));
+                    SqliteQuery::push_document_action_expression(
+                        &mut builder,
+                        &context,
+                        related_schema,
+                        "rel",
+                        PermissionEnum::Read,
+                    )?;
+                }
+                RelationshipKind::ManyToMany => {
+                    let through = relation.through.ok_or_else(|| {
+                        DatabaseError::Other(
+                            "many-to-many relation is missing through metadata".into(),
+                        )
+                    })?;
+                    let through_table =
+                        SqliteUtils::qualified_table_name(&context, through.schema.id);
+                    let base_join_column = SqliteUtils::qualified_column_for_field(
+                        schema,
+                        relation.local_field,
+                        Some("main"),
+                    )?;
+                    let through_local_column = SqliteUtils::qualified_column_for_field(
+                        through.schema,
+                        through.local_field,
+                        Some("jt"),
+                    )?;
+                    let through_remote_column = SqliteUtils::qualified_column_for_field(
+                        through.schema,
+                        through.remote_field,
+                        Some("jt"),
+                    )?;
+                    let related_join_column = SqliteUtils::qualified_column_for_field(
+                        related_schema,
+                        relation.remote_field,
+                        Some("rel"),
+                    )?;
+                    builder.push(format!(
+                        "LEFT JOIN {through_table} AS jt ON {base_join_column} = {through_local_column} AND "
+                    ));
+                    SqliteQuery::push_document_action_expression(
+                        &mut builder,
+                        &context,
+                        through.schema,
+                        "jt",
+                        PermissionEnum::Read,
+                    )?;
+                    builder.push(format!(
+                        " LEFT JOIN {related_table} AS rel ON {through_remote_column} = {related_join_column} AND "
+                    ));
+                    SqliteQuery::push_document_action_expression(
+                        &mut builder,
+                        &context,
+                        related_schema,
+                        "rel",
+                        PermissionEnum::Read,
+                    )?;
+                }
+            }
+
+            if !use_base_subquery {
+                let mut has_where = false;
+                SqliteQuery::push_document_action_condition(
+                    &mut builder,
+                    &context,
+                    schema,
+                    "main",
+                    PermissionEnum::Read,
+                    &mut has_where,
+                )?;
+                for filter in query.filters() {
+                    SqliteQuery::push_condition_separator(&mut builder, &mut has_where);
+                    SqliteQuery::push_filter_for_alias(&mut builder, schema, filter, Some("main"))?;
+                }
+            }
+
+            if !query.sorts().is_empty() {
+                builder.push(" ORDER BY ");
+                let mut first = true;
+                for sort in query.sorts() {
+                    if !first {
+                        builder.push(", ");
+                    }
+                    first = false;
+                    let column =
+                        SqliteUtils::qualified_column_for_field(schema, sort.field, Some("main"))?;
+                    builder.push(column);
+                    match sort.direction {
+                        SortDirection::Asc => builder.push(" ASC"),
+                        SortDirection::Desc => builder.push(" DESC"),
+                    };
+                }
+                if use_base_subquery {
+                    builder.push(", ");
+                    builder.push(format!(
+                        "rel.{} ASC",
+                        SqliteUtils::quote_identifier(COLUMN_SEQUENCE)
+                    ));
+                }
+            } else if use_base_subquery {
+                builder.push(format!(
+                    " ORDER BY main.{}, rel.{} ASC",
+                    SqliteUtils::quote_identifier(COLUMN_SEQUENCE),
+                    SqliteUtils::quote_identifier(COLUMN_SEQUENCE)
+                ));
+            }
+
+            if !use_base_subquery {
+                if let Some(limit) = query.limit_value() {
+                    builder.push(" LIMIT ");
+                    builder.push_bind(limit as i64);
+                }
+                if let Some(offset) = query.offset_value() {
+                    builder.push(" OFFSET ");
+                    builder.push_bind(offset as i64);
+                }
+            }
+
+            let rows = builder
+                .build()
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+
+            let mut joined = Vec::with_capacity(rows.len());
+            for row in rows {
+                let Some(base) = SqliteUtils::row_to_record_prefixed(&row, schema, Some("base"))?
+                else {
+                    continue;
+                };
+                let related =
+                    SqliteUtils::row_to_record_prefixed(&row, related_schema, Some("rel"))?;
+                joined.push(JoinedStorageRecord { base, related });
+            }
+
+            Ok(Some(joined))
+        })
+    }
+
+    fn find_populated(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        query: &QuerySpec,
+        populates: Vec<StoragePopulate>,
+    ) -> AdapterFuture<'_, Result<Option<Vec<PopulatedStorageRow>>, DatabaseError>> {
+        let pool = self.pool.clone();
+        let context = context.clone();
+        let query = query.clone();
+        Box::pin(async move {
+            if populates.is_empty() {
+                return Ok(None);
+            }
+
+            let base_table = SqliteUtils::qualified_table_name(&context, schema.id);
+            let mut select_parts = vec![SqliteUtils::select_columns_for_alias(
+                schema, "main", "base",
+            )];
+            for (index, populate) in populates.iter().enumerate() {
+                let alias = format!("rel_{index}");
+                select_parts.push(SqliteUtils::select_columns_for_alias(
+                    populate.schema,
+                    &alias,
+                    &alias,
+                ));
+            }
+
+            let use_base_subquery = populates.iter().any(|populate| {
+                matches!(
+                    populate.relation.kind,
+                    RelationshipKind::OneToMany | RelationshipKind::ManyToMany
+                )
+            });
+
+            let mut builder =
+                QueryBuilder::<Sqlite>::new(format!("SELECT {} FROM ", select_parts.join(", ")));
+
+            if use_base_subquery {
+                builder.push("(SELECT ");
+                builder.push(SqliteUtils::select_columns(schema));
+                builder.push(format!(" FROM {base_table} AS main"));
+                let mut has_where = false;
+                SqliteQuery::push_document_action_condition(
+                    &mut builder,
+                    &context,
+                    schema,
+                    "main",
+                    PermissionEnum::Read,
+                    &mut has_where,
+                )?;
+                for filter in query.filters() {
+                    SqliteQuery::push_condition_separator(&mut builder, &mut has_where);
+                    SqliteQuery::push_filter_for_alias(&mut builder, schema, filter, Some("main"))?;
+                }
+                if !query.sorts().is_empty() {
+                    builder.push(" ORDER BY ");
+                    let mut first = true;
+                    for sort in query.sorts() {
+                        if !first {
+                            builder.push(", ");
+                        }
+                        first = false;
+                        let column = SqliteUtils::qualified_column_for_field(
+                            schema,
+                            sort.field,
+                            Some("main"),
+                        )?;
+                        builder.push(column);
+                        match sort.direction {
+                            SortDirection::Asc => builder.push(" ASC"),
+                            SortDirection::Desc => builder.push(" DESC"),
+                        };
+                    }
+                }
+                if let Some(limit) = query.limit_value() {
+                    builder.push(" LIMIT ");
+                    builder.push_bind(limit as i64);
+                }
+                if let Some(offset) = query.offset_value() {
+                    builder.push(" OFFSET ");
+                    builder.push_bind(offset as i64);
+                }
+                builder.push(") AS main ");
+            } else {
+                builder.push(format!("{base_table} AS main "));
+            }
+
+            for (index, populate) in populates.iter().enumerate() {
+                let relation = &populate.relation;
+                let related_table = SqliteUtils::qualified_table_name(&context, populate.schema.id);
+                let relation_alias = format!("rel_{index}");
+
+                match relation.kind {
+                    RelationshipKind::ManyToOne
+                    | RelationshipKind::OneToOne
+                    | RelationshipKind::OneToMany => {
+                        let base_join_column = SqliteUtils::qualified_column_for_field(
+                            schema,
+                            relation.local_field,
+                            Some("main"),
+                        )?;
+                        let related_join_column = SqliteUtils::qualified_column_for_field(
+                            populate.schema,
+                            relation.remote_field,
+                            Some(&relation_alias),
+                        )?;
+                        builder.push(format!(
+                            "LEFT JOIN {related_table} AS {relation_alias} ON {base_join_column} = {related_join_column} AND "
+                        ));
+                        SqliteQuery::push_document_action_expression(
+                            &mut builder,
+                            &context,
+                            populate.schema,
+                            &relation_alias,
+                            PermissionEnum::Read,
+                        )?;
+                    }
+                    RelationshipKind::ManyToMany => {
+                        let through = relation.through.as_ref().ok_or_else(|| {
+                            DatabaseError::Other(
+                                "many-to-many relation is missing through metadata".into(),
+                            )
+                        })?;
+                        let through_alias = format!("jt_{index}");
+                        let through_table =
+                            SqliteUtils::qualified_table_name(&context, through.schema.id);
+                        let base_join_column = SqliteUtils::qualified_column_for_field(
+                            schema,
+                            relation.local_field,
+                            Some("main"),
+                        )?;
+                        let through_local_column = SqliteUtils::qualified_column_for_field(
+                            through.schema,
+                            through.local_field,
+                            Some(&through_alias),
+                        )?;
+                        let through_remote_column = SqliteUtils::qualified_column_for_field(
+                            through.schema,
+                            through.remote_field,
+                            Some(&through_alias),
+                        )?;
+                        let related_join_column = SqliteUtils::qualified_column_for_field(
+                            populate.schema,
+                            relation.remote_field,
+                            Some(&relation_alias),
+                        )?;
+                        builder.push(format!(
+                            "LEFT JOIN {through_table} AS {through_alias} ON {base_join_column} = {through_local_column} AND "
+                        ));
+                        SqliteQuery::push_document_action_expression(
+                            &mut builder,
+                            &context,
+                            through.schema,
+                            &through_alias,
+                            PermissionEnum::Read,
+                        )?;
+                        builder.push(format!(
+                            " LEFT JOIN {related_table} AS {relation_alias} ON {through_remote_column} = {related_join_column} AND "
+                        ));
+                        SqliteQuery::push_document_action_expression(
+                            &mut builder,
+                            &context,
+                            populate.schema,
+                            &relation_alias,
+                            PermissionEnum::Read,
+                        )?;
+                    }
+                }
+                builder.push(" ");
+            }
+
+            if !use_base_subquery {
+                let mut has_where = false;
+                SqliteQuery::push_document_action_condition(
+                    &mut builder,
+                    &context,
+                    schema,
+                    "main",
+                    PermissionEnum::Read,
+                    &mut has_where,
+                )?;
+                for filter in query.filters() {
+                    SqliteQuery::push_condition_separator(&mut builder, &mut has_where);
+                    SqliteQuery::push_filter_for_alias(&mut builder, schema, filter, Some("main"))?;
+                }
+            }
+
+            if !query.sorts().is_empty() {
+                builder.push(" ORDER BY ");
+                let mut first = true;
+                for sort in query.sorts() {
+                    if !first {
+                        builder.push(", ");
+                    }
+                    first = false;
+                    let column =
+                        SqliteUtils::qualified_column_for_field(schema, sort.field, Some("main"))?;
+                    builder.push(column);
+                    match sort.direction {
+                        SortDirection::Asc => builder.push(" ASC"),
+                        SortDirection::Desc => builder.push(" DESC"),
+                    };
+                }
+                if use_base_subquery {
+                    for index in 0..populates.len() {
+                        builder.push(", ");
+                        builder.push(format!(
+                            "rel_{index}.{} ASC",
+                            SqliteUtils::quote_identifier(COLUMN_SEQUENCE)
+                        ));
+                    }
+                }
+            } else if use_base_subquery {
+                builder.push(format!(
+                    " ORDER BY main.{} ASC",
+                    SqliteUtils::quote_identifier(COLUMN_SEQUENCE)
+                ));
+                for index in 0..populates.len() {
+                    builder.push(", ");
+                    builder.push(format!(
+                        "rel_{index}.{} ASC",
+                        SqliteUtils::quote_identifier(COLUMN_SEQUENCE)
+                    ));
+                }
+            }
+
+            if !use_base_subquery {
+                if let Some(limit) = query.limit_value() {
+                    builder.push(" LIMIT ");
+                    builder.push_bind(limit as i64);
+                }
+                if let Some(offset) = query.offset_value() {
+                    builder.push(" OFFSET ");
+                    builder.push_bind(offset as i64);
+                }
+            }
+
+            let rows = builder
+                .build()
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+
+            let mut populated_rows = Vec::with_capacity(rows.len());
+            for row in rows {
+                let Some(base) = SqliteUtils::row_to_record_prefixed(&row, schema, Some("base"))?
+                else {
+                    continue;
+                };
+                let mut related = std::collections::BTreeMap::new();
+                for (index, populate) in populates.iter().enumerate() {
+                    let prefix = format!("rel_{index}");
+                    let record =
+                        SqliteUtils::row_to_record_prefixed(&row, populate.schema, Some(&prefix))?;
+                    related.insert(populate.name.to_string(), record);
+                }
+                populated_rows.push(PopulatedStorageRow { base, related });
+            }
+
+            Ok(Some(populated_rows))
         })
     }
 

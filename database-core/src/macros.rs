@@ -91,6 +91,9 @@ macro_rules! db_query {
     (@apply $query:ident, select, $val:expr) => {
         $query.select($val)
     };
+    (@apply $query:ident, include, $val:expr) => {
+        $query.include($val)
+    };
     (@apply $query:ident, limit, $val:expr) => {
         $query.limit($val)
     };
@@ -162,6 +165,66 @@ macro_rules! impl_create_builder {
     };
 }
 
+/// Bridge derive-generated record mappings into a full [`Model`] impl.
+#[macro_export]
+macro_rules! impl_model_record_bridge {
+    (
+        name: $model_name:ident,
+        entity: $entity_name:ty,
+        create: $create_name:ty,
+        update: $update_name:ty,
+        schema: $schema_const:ident
+    ) => {
+        impl $crate::Model for $model_name {
+            type Id = <$entity_name as $crate::EntityRecord>::Id;
+            type Entity = $entity_name;
+            type Create = $create_name;
+            type Update = $update_name;
+
+            fn schema() -> &'static $crate::CollectionSchema {
+                &$schema_const
+            }
+
+            fn entity_to_id(entity: &Self::Entity) -> &Self::Id {
+                <$entity_name as $crate::EntityRecord>::entity_to_id(entity)
+            }
+
+            fn entity_metadata(entity: &Self::Entity) -> &$crate::Metadata {
+                <$entity_name as $crate::EntityRecord>::entity_metadata(entity)
+            }
+
+            fn create_to_record(
+                input: Self::Create,
+                context: &$crate::Context,
+            ) -> Result<$crate::traits::storage::StorageRecord, $crate::errors::DatabaseError> {
+                <$create_name as $crate::CreateRecord>::create_to_record(input, context)
+            }
+
+            fn update_to_record(
+                input: Self::Update,
+                context: &$crate::Context,
+            ) -> Result<$crate::traits::storage::StorageRecord, $crate::errors::DatabaseError> {
+                <$update_name as $crate::UpdateRecord>::update_to_record(input, context)
+            }
+
+            fn entity_from_record(
+                record: $crate::traits::storage::StorageRecord,
+                context: &$crate::Context,
+            ) -> Result<Self::Entity, $crate::errors::DatabaseError> {
+                <$entity_name as $crate::EntityRecord>::from_record(record, context)
+            }
+
+            fn resolve_entity<'a>(
+                entity: Self::Entity,
+                context: &'a $crate::Context,
+            ) -> $crate::model::ModelFuture<'a, Result<Self::Entity, $crate::errors::DatabaseError>>
+            {
+                <$entity_name as $crate::EntityRecord>::resolve_entity(entity, context)
+            }
+        }
+    };
+}
+
 /// Generate a full [`Model`] implementation for a model struct.
 ///
 /// This macro wires up the `create_to_record`, `update_to_record`, and
@@ -200,6 +263,8 @@ macro_rules! impl_model {
         }
         $(, virtuals: { $($virtual_field:ident),* })?
         $(, loaded: { $($loaded_field:ident),* })?
+        $(, loaded_one: { $($loaded_one_field:ident),* })?
+        $(, loaded_many: { $($loaded_many_field:ident),* })?
         $(, resolvers: { $($resolver_field:ident : $resolver_fn:path),* })?
     ) => {
         impl $crate::Model for $model_name {
@@ -272,6 +337,12 @@ macro_rules! impl_model {
                     )*)?
                     $($(
                         $loaded_field: $crate::Populated::NotLoaded,
+                    )*)?
+                    $($(
+                        $loaded_one_field: $crate::RelationOne::NotLoaded,
+                    )*)?
+                    $($(
+                        $loaded_many_field: $crate::RelationMany::NotLoaded,
                     )*)?
                 })
             }

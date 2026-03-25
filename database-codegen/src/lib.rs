@@ -117,6 +117,9 @@ pub struct RelationshipSpec {
     #[serde(default)]
     pub two_way: bool,
     pub two_way_key: Option<String>,
+    pub through_collection: Option<String>,
+    pub through_local_field: Option<String>,
+    pub through_remote_field: Option<String>,
     #[serde(default)]
     pub on_delete: OnDeleteActionSpec,
 }
@@ -340,12 +343,28 @@ pub fn validate_project_spec(spec: &ProjectSpec) -> Result<(), CodegenError> {
                     )));
                 }
 
-                let column = attribute.column.as_deref().unwrap_or(&attribute.id);
-                if !columns.insert(column) {
-                    return Err(CodegenError::Invalid(format!(
-                        "collection '{}' has duplicate column '{}'",
-                        collection.id, column
-                    )));
+                if attribute_is_relation_many(attribute) {
+                    if !attribute.filters.is_empty() {
+                        return Err(CodegenError::Invalid(format!(
+                            "collection '{}': relation-many attribute '{}' cannot declare filters",
+                            collection.id, attribute.id
+                        )));
+                    }
+                    if attribute.required {
+                        return Err(CodegenError::Invalid(format!(
+                            "collection '{}': relation-many attribute '{}' cannot be required",
+                            collection.id, attribute.id
+                        )));
+                    }
+                    let _ = related_entity_type(spec, collection, attribute)?;
+                } else {
+                    let column = attribute.column.as_deref().unwrap_or(&attribute.id);
+                    if !columns.insert(column) {
+                        return Err(CodegenError::Invalid(format!(
+                            "collection '{}' has duplicate column '{}'",
+                            collection.id, column
+                        )));
+                    }
                 }
             }
 
@@ -359,6 +378,33 @@ pub fn validate_project_spec(spec: &ProjectSpec) -> Result<(), CodegenError> {
                             "collection '{}': attribute '{}' filter chain stores '{}', expected '{}'",
                             collection.id, attribute.id, last.encoded_type, storage_type
                         )));
+                    }
+                }
+            }
+
+            if let Some(rel) = &attribute.relationship {
+                match rel.kind {
+                    RelationshipKindSpec::ManyToMany => {
+                        if rel.through_collection.as_deref().unwrap_or("").is_empty()
+                            || rel.through_local_field.as_deref().unwrap_or("").is_empty()
+                            || rel.through_remote_field.as_deref().unwrap_or("").is_empty()
+                        {
+                            return Err(CodegenError::Invalid(format!(
+                                "collection '{}': many-to-many attribute '{}' requires throughCollection, throughLocalField, and throughRemoteField",
+                                collection.id, attribute.id
+                            )));
+                        }
+                    }
+                    _ => {
+                        if rel.through_collection.is_some()
+                            || rel.through_local_field.is_some()
+                            || rel.through_remote_field.is_some()
+                        {
+                            return Err(CodegenError::Invalid(format!(
+                                "collection '{}': non-many-to-many attribute '{}' cannot declare throughCollection/throughLocalField/throughRemoteField",
+                                collection.id, attribute.id
+                            )));
+                        }
                     }
                 }
             }
@@ -409,6 +455,13 @@ pub fn validate_project_spec(spec: &ProjectSpec) -> Result<(), CodegenError> {
                 if attribute.kind == AttributeKindSpec::Virtual {
                     return Err(CodegenError::Invalid(format!(
                         "collection '{}': index '{}' cannot reference virtual attribute '{}'",
+                        collection.id, index.id, attribute_id
+                    )));
+                }
+
+                if !attribute_is_persisted(attribute) {
+                    return Err(CodegenError::Invalid(format!(
+                        "collection '{}': index '{}' cannot reference non-persisted relationship attribute '{}'",
                         collection.id, index.id, attribute_id
                     )));
                 }
@@ -544,6 +597,15 @@ fn emit_collection(
             field_type
         )
         .unwrap();
+        if attribute_is_relation_one(attribute) {
+            writeln!(
+                out,
+                "        pub {}: nx_db::RelationOne<{}>,",
+                loaded_relation_field_name(attribute),
+                related_entity_type(spec, collection, attribute)?
+            )
+            .unwrap();
+        }
     }
     writeln!(out, "        pub _metadata: nx_db::Metadata,").unwrap();
     writeln!(out, "    }}").unwrap();
@@ -553,7 +615,7 @@ fn emit_collection(
     writeln!(out, "    pub struct {create_name} {{").unwrap();
     writeln!(out, "        pub id: Option<{id_name}>,").unwrap();
     for attribute in &collection.attributes {
-        if attribute.kind == AttributeKindSpec::Virtual {
+        if attribute.kind == AttributeKindSpec::Virtual || attribute_is_relation_many(attribute) {
             continue;
         }
         let field_type = entity_field_type(spec, collection, attribute)?;
@@ -572,7 +634,11 @@ fn emit_collection(
     let required_create_args = collection
         .attributes
         .iter()
-        .filter(|attribute| attribute.kind != AttributeKindSpec::Virtual && attribute.required)
+        .filter(|attribute| {
+            attribute.kind != AttributeKindSpec::Virtual
+                && !attribute_is_relation_many(attribute)
+                && attribute.required
+        })
         .map(|attribute| {
             let field_name = rust_field_name(&attribute.id);
             let field_type = entity_field_type(spec, collection, attribute)?;
@@ -582,7 +648,11 @@ fn emit_collection(
     let optional_create_args = collection
         .attributes
         .iter()
-        .filter(|attribute| attribute.kind != AttributeKindSpec::Virtual && !attribute.required)
+        .filter(|attribute| {
+            attribute.kind != AttributeKindSpec::Virtual
+                && !attribute_is_relation_many(attribute)
+                && !attribute.required
+        })
         .map(|attribute| {
             let field_name = rust_field_name(&attribute.id);
             let field_type = entity_field_type(spec, collection, attribute)?;
@@ -602,7 +672,7 @@ fn emit_collection(
     writeln!(out, "    #[derive(Debug, Clone, Default)]").unwrap();
     writeln!(out, "    pub struct {update_name} {{").unwrap();
     for attribute in &collection.attributes {
-        if attribute.kind == AttributeKindSpec::Virtual {
+        if attribute.kind == AttributeKindSpec::Virtual || attribute_is_relation_many(attribute) {
             continue;
         }
         let field_type = entity_field_type(spec, collection, attribute)?;
@@ -638,6 +708,9 @@ fn emit_collection(
         .map(|filter| (filter.name.as_str(), filter))
         .collect();
     for attribute in &collection.attributes {
+        if attribute_is_relation_many(attribute) {
+            continue;
+        }
         let const_name = format!("{model_const}_{}", screaming_snake(&attribute.id));
         if attribute.filters.is_empty() {
             let query_type = query_field_type(attribute);
@@ -663,10 +736,186 @@ fn emit_collection(
             .unwrap();
         }
     }
+    for attribute in &collection.attributes {
+        let Some(rel) = &attribute.relationship else {
+            continue;
+        };
+
+        let Some(related_collection) = spec
+            .collections
+            .iter()
+            .find(|candidate| candidate.id == rel.related_collection)
+        else {
+            continue;
+        };
+
+        let related_model_name = related_collection
+            .model
+            .clone()
+            .unwrap_or_else(|| default_model_name(related_collection));
+        let rel_const_name = format!("{model_const}_{}_REL", screaming_snake(&attribute.id));
+        let rel_expr = match rel.kind {
+            RelationshipKindSpec::ManyToOne => Some(format!(
+                "nx_db::Rel::<{model_name}, {related_model_name}>::many_to_one(\"{}\", \"{}\")",
+                attribute.id, attribute.id
+            )),
+            RelationshipKindSpec::OneToMany => rel.two_way_key.as_ref().map(|remote_fk| {
+                format!(
+                    "nx_db::Rel::<{model_name}, {related_model_name}>::one_to_many(\"{}\", \"{}\")",
+                    attribute.id,
+                    escape_string(remote_fk)
+                )
+            }),
+            RelationshipKindSpec::OneToOne => {
+                let remote_field_expr = rel
+                    .two_way_key
+                    .as_ref()
+                    .map(|field| format!("\"{}\"", escape_string(field)))
+                    .unwrap_or_else(|| "nx_db::FIELD_ID".to_string());
+                let local_field_expr = if rel.side == RelationshipSideSpec::Child {
+                    "nx_db::FIELD_ID".to_string()
+                } else {
+                    format!("\"{}\"", escape_string(&attribute.id))
+                };
+                Some(format!(
+                    "nx_db::Rel::<{model_name}, {related_model_name}>::one_to_one(\"{}\", {}, {})",
+                    attribute.id, local_field_expr, remote_field_expr
+                ))
+            }
+            RelationshipKindSpec::ManyToMany => Some(format!(
+                "nx_db::Rel::<{model_name}, {related_model_name}>::many_to_many(\"{}\", \"{}\", \"{}\", \"{}\")",
+                attribute.id,
+                escape_string(
+                    rel.through_collection
+                        .as_deref()
+                        .expect("validated throughCollection")
+                ),
+                escape_string(
+                    rel.through_local_field
+                        .as_deref()
+                        .expect("validated throughLocalField")
+                ),
+                escape_string(
+                    rel.through_remote_field
+                        .as_deref()
+                        .expect("validated throughRemoteField")
+                )
+            )),
+        };
+
+        if let Some(rel_expr) = rel_expr {
+            writeln!(
+                out,
+                "    pub const {rel_const_name}: nx_db::Rel<{model_name}, {related_model_name}> = {rel_expr};"
+            )
+            .unwrap();
+
+            let populate_const_name =
+                format!("{model_const}_{}_POPULATE", screaming_snake(&attribute.id));
+            let local_fn = format!(
+                "populate_{}_{}_local_key",
+                rust_field_name(&model_name),
+                rust_field_name(&attribute.id)
+            );
+            let remote_fn = format!(
+                "populate_{}_{}_remote_key",
+                rust_field_name(&model_name),
+                rust_field_name(&attribute.id)
+            );
+            let set_fn = format!(
+                "populate_{}_{}_set",
+                rust_field_name(&model_name),
+                rust_field_name(&attribute.id)
+            );
+
+            match rel.kind {
+                RelationshipKindSpec::ManyToOne | RelationshipKindSpec::OneToOne => {
+                    let local_key_expr = if rel.kind == RelationshipKindSpec::OneToOne
+                        && rel.side == RelationshipSideSpec::Child
+                    {
+                        "Some(entity.id.to_string())".to_string()
+                    } else {
+                        entity_optional_string_key_expr(collection, &attribute.id, "entity")?
+                    };
+                    let remote_field = if rel.kind == RelationshipKindSpec::OneToOne {
+                        rel.two_way_key.as_deref().unwrap_or("id")
+                    } else {
+                        "id"
+                    };
+                    let remote_key_expr = entity_optional_string_key_expr(
+                        related_collection,
+                        remote_field,
+                        "entity",
+                    )?;
+                    let loaded_field = loaded_relation_field_name(attribute);
+
+                    writeln!(
+                        out,
+                        "    fn {local_fn}(entity: &{entity_name}) -> Option<String> {{"
+                    )
+                    .unwrap();
+                    writeln!(out, "        {local_key_expr}").unwrap();
+                    writeln!(out, "    }}").unwrap();
+                    writeln!(out, "    fn {remote_fn}(entity: &{related_model_name}Entity) -> Option<String> {{").unwrap();
+                    writeln!(out, "        {remote_key_expr}").unwrap();
+                    writeln!(out, "    }}").unwrap();
+                    writeln!(
+                        out,
+                        "    fn {set_fn}(entity: &mut {entity_name}, value: nx_db::RelationOne<{related_model_name}Entity>) {{"
+                    )
+                    .unwrap();
+                    writeln!(out, "        entity.{loaded_field} = value;").unwrap();
+                    writeln!(out, "    }}").unwrap();
+                    writeln!(
+                        out,
+                        "    pub const {populate_const_name}: nx_db::core::PopulateOne<{model_name}, {related_model_name}> = nx_db::core::PopulateOne::new({rel_const_name}, {local_fn}, {remote_fn}, {set_fn});"
+                    )
+                    .unwrap();
+                }
+                RelationshipKindSpec::OneToMany | RelationshipKindSpec::ManyToMany => {
+                    let local_key_expr = "entity.id.to_string()".to_string();
+                    let remote_field = if rel.kind == RelationshipKindSpec::OneToMany {
+                        rel.two_way_key.as_deref().unwrap_or("id")
+                    } else {
+                        "id"
+                    };
+                    let remote_key_expr = entity_optional_string_key_expr(
+                        related_collection,
+                        remote_field,
+                        "entity",
+                    )?;
+                    let field_name = rust_field_name(&attribute.id);
+
+                    writeln!(
+                        out,
+                        "    fn {local_fn}(entity: &{entity_name}) -> String {{"
+                    )
+                    .unwrap();
+                    writeln!(out, "        {local_key_expr}").unwrap();
+                    writeln!(out, "    }}").unwrap();
+                    writeln!(out, "    fn {remote_fn}(entity: &{related_model_name}Entity) -> Option<String> {{").unwrap();
+                    writeln!(out, "        {remote_key_expr}").unwrap();
+                    writeln!(out, "    }}").unwrap();
+                    writeln!(
+                        out,
+                        "    fn {set_fn}(entity: &mut {entity_name}, value: nx_db::RelationMany<{related_model_name}Entity>) {{"
+                    )
+                    .unwrap();
+                    writeln!(out, "        entity.{field_name} = value;").unwrap();
+                    writeln!(out, "    }}").unwrap();
+                    writeln!(
+                        out,
+                        "    pub const {populate_const_name}: nx_db::core::PopulateMany<{model_name}, {related_model_name}> = nx_db::core::PopulateMany::new({rel_const_name}, {local_fn}, {remote_fn}, {set_fn});"
+                    )
+                    .unwrap();
+                }
+            }
+        }
+    }
     writeln!(out).unwrap();
 
     for attribute in &collection.attributes {
-        if attribute.filters.is_empty() {
+        if attribute.filters.is_empty() || attribute_is_relation_many(attribute) {
             continue;
         }
 
@@ -786,7 +1035,7 @@ fn emit_collection(
         writeln!(
             out,
             "            persistence: AttributePersistence::{},",
-            if attribute.kind == AttributeKindSpec::Virtual {
+            if !attribute_is_persisted(attribute) {
                 "Virtual"
             } else {
                 "Persisted"
@@ -833,6 +1082,33 @@ fn emit_collection(
                 out,
                 "                two_way_key: {},",
                 rel.two_way_key
+                    .as_ref()
+                    .map(|k| format!("Some(\"{}\")", escape_string(k)))
+                    .unwrap_or_else(|| "None".to_string())
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "                through_collection: {},",
+                rel.through_collection
+                    .as_ref()
+                    .map(|k| format!("Some(\"{}\")", escape_string(k)))
+                    .unwrap_or_else(|| "None".to_string())
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "                through_local_field: {},",
+                rel.through_local_field
+                    .as_ref()
+                    .map(|k| format!("Some(\"{}\")", escape_string(k)))
+                    .unwrap_or_else(|| "None".to_string())
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "                through_remote_field: {},",
+                rel.through_remote_field
                     .as_ref()
                     .map(|k| format!("Some(\"{}\")", escape_string(k)))
                     .unwrap_or_else(|| "None".to_string())
@@ -893,7 +1169,7 @@ fn emit_collection(
     )
     .unwrap();
     for attribute in &collection.attributes {
-        if attribute.kind == AttributeKindSpec::Virtual {
+        if attribute.kind == AttributeKindSpec::Virtual || attribute_is_relation_many(attribute) {
             continue;
         }
         let const_name = screaming_snake(&attribute.id);
@@ -915,6 +1191,8 @@ fn emit_collection(
 
     let mut attribute_lines = Vec::new();
     let mut virtual_lines = Vec::new();
+    let mut loaded_one_lines = Vec::new();
+    let mut loaded_many_lines = Vec::new();
     let mut resolver_lines = Vec::new();
     for attribute in &collection.attributes {
         if attribute.kind == AttributeKindSpec::Virtual {
@@ -922,6 +1200,13 @@ fn emit_collection(
             virtual_lines.push(field.clone());
             let resolver = resolve_attribute_resolver(&resolvers_by_name, collection, attribute)?;
             resolver_lines.push(format!("{} : {}", field, resolver.resolve));
+            continue;
+        }
+        if attribute_is_relation_one(attribute) {
+            loaded_one_lines.push(loaded_relation_field_name(attribute));
+        }
+        if attribute_is_relation_many(attribute) {
+            loaded_many_lines.push(rust_field_name(&attribute.id));
             continue;
         }
         let field_id = &attribute.id;
@@ -946,15 +1231,34 @@ fn emit_collection(
         }
     }
 
-    if virtual_lines.is_empty() {
-        writeln!(out, "    nx_db::impl_model! {{ name: {}, id: {}, entity: {}, create: {}, update: {}, schema: {}, fields: {{ {} }} }}",
-            model_name, id_name, entity_name, create_name, update_name, schema_const, attribute_lines.join(", ")
-        ).unwrap();
-    } else {
-        writeln!(out, "    nx_db::impl_model! {{ name: {}, id: {}, entity: {}, create: {}, update: {}, schema: {}, fields: {{ {} }}, virtuals: {{ {} }}, resolvers: {{ {} }} }}",
-            model_name, id_name, entity_name, create_name, update_name, schema_const, attribute_lines.join(", "), virtual_lines.join(", "), resolver_lines.join(", ")
-        ).unwrap();
+    write!(
+        out,
+        "    nx_db::impl_model! {{ name: {}, id: {}, entity: {}, create: {}, update: {}, schema: {}, fields: {{ {} }}",
+        model_name,
+        id_name,
+        entity_name,
+        create_name,
+        update_name,
+        schema_const,
+        attribute_lines.join(", ")
+    )
+    .unwrap();
+    if !virtual_lines.is_empty() {
+        write!(
+            out,
+            ", virtuals: {{ {} }}, resolvers: {{ {} }}",
+            virtual_lines.join(", "),
+            resolver_lines.join(", ")
+        )
+        .unwrap();
     }
+    if !loaded_one_lines.is_empty() {
+        write!(out, ", loaded_one: {{ {} }}", loaded_one_lines.join(", ")).unwrap();
+    }
+    if !loaded_many_lines.is_empty() {
+        write!(out, ", loaded_many: {{ {} }}", loaded_many_lines.join(", ")).unwrap();
+    }
+    writeln!(out, " }}").unwrap();
 
     Ok(())
 }
@@ -1042,11 +1346,90 @@ fn storage_field_base_type(kind: AttributeKindSpec, array: bool) -> String {
     }
 }
 
+fn attribute_is_relation_many(attribute: &AttributeSpec) -> bool {
+    attribute.kind == AttributeKindSpec::Relationship
+        && matches!(
+            attribute.relationship.as_ref().map(|rel| rel.kind),
+            Some(RelationshipKindSpec::OneToMany | RelationshipKindSpec::ManyToMany)
+        )
+}
+
+fn attribute_is_relation_one(attribute: &AttributeSpec) -> bool {
+    attribute.kind == AttributeKindSpec::Relationship
+        && matches!(
+            attribute.relationship.as_ref().map(|rel| rel.kind),
+            Some(RelationshipKindSpec::ManyToOne | RelationshipKindSpec::OneToOne)
+        )
+}
+
+fn loaded_relation_field_name(attribute: &AttributeSpec) -> String {
+    format!("{}_rel", rust_field_name(&attribute.id))
+}
+
+fn attribute_is_persisted(attribute: &AttributeSpec) -> bool {
+    attribute.kind != AttributeKindSpec::Virtual && !attribute_is_relation_many(attribute)
+}
+
 fn attribute_column(attribute: &AttributeSpec) -> &str {
-    if attribute.kind == AttributeKindSpec::Virtual {
+    if !attribute_is_persisted(attribute) {
         ""
     } else {
         attribute.column.as_deref().unwrap_or(&attribute.id)
+    }
+}
+
+fn related_entity_type(
+    spec: &ProjectSpec,
+    collection: &CollectionSpec,
+    attribute: &AttributeSpec,
+) -> Result<String, CodegenError> {
+    let rel = attribute.relationship.as_ref().ok_or_else(|| {
+        CodegenError::Invalid(format!(
+            "collection '{}': relationship attribute '{}' is missing relationship metadata",
+            collection.id, attribute.id
+        ))
+    })?;
+    let related_collection = spec
+        .collections
+        .iter()
+        .find(|candidate| candidate.id == rel.related_collection)
+        .ok_or_else(|| {
+            CodegenError::Invalid(format!(
+                "collection '{}': attribute '{}' references unknown related collection '{}'",
+                collection.id, attribute.id, rel.related_collection
+            ))
+        })?;
+    let related_model = related_collection
+        .model
+        .clone()
+        .unwrap_or_else(|| default_model_name(related_collection));
+    Ok(format!("{related_model}Entity"))
+}
+
+fn entity_optional_string_key_expr(
+    collection: &CollectionSpec,
+    field_id: &str,
+    entity_var: &str,
+) -> Result<String, CodegenError> {
+    if field_id == "id" {
+        return Ok(format!("Some({entity_var}.id.to_string())"));
+    }
+
+    let attribute = collection
+        .attributes
+        .iter()
+        .find(|attribute| attribute.id == field_id)
+        .ok_or_else(|| {
+            CodegenError::Invalid(format!(
+                "collection '{}': unknown relationship key field '{}'",
+                collection.id, field_id
+            ))
+        })?;
+    let field_name = rust_field_name(&attribute.id);
+    if attribute.required {
+        Ok(format!("Some({entity_var}.{field_name}.clone())"))
+    } else {
+        Ok(format!("{entity_var}.{field_name}.clone()"))
     }
 }
 
@@ -1055,6 +1438,13 @@ fn entity_field_type(
     collection: &CollectionSpec,
     attribute: &AttributeSpec,
 ) -> Result<String, CodegenError> {
+    if attribute_is_relation_many(attribute) {
+        return Ok(format!(
+            "nx_db::RelationMany<{}>",
+            related_entity_type(spec, collection, attribute)?
+        ));
+    }
+
     if attribute.kind == AttributeKindSpec::Virtual {
         let resolvers_by_name: BTreeMap<&str, &ResolverSpec> = spec
             .resolvers
@@ -1315,7 +1705,7 @@ impl database_core::traits::migration::MigrationCollection for CollectionSpec {
                 array: a.array,
                 length: a.length,
                 default: None,
-                persistence: if a.kind == AttributeKindSpec::Virtual {
+                persistence: if !attribute_is_persisted(a) {
                     database_core::AttributePersistence::Virtual
                 } else {
                     database_core::AttributePersistence::Persisted
@@ -1394,6 +1784,47 @@ mod tests {
     }
     "#;
 
+    const MANY_TO_MANY_SPEC: &str = r#"
+    {
+      "module": "membership_models",
+      "collections": [
+        {
+          "id": "users",
+          "name": "Users",
+          "attributes": [
+            { "id": "name", "kind": "string", "required": true },
+            {
+              "id": "roles",
+              "kind": "relationship",
+              "relationship": {
+                "relatedCollection": "roles",
+                "kind": "manytomany",
+                "throughCollection": "user_roles",
+                "throughLocalField": "userId",
+                "throughRemoteField": "roleId"
+              }
+            }
+          ]
+        },
+        {
+          "id": "roles",
+          "name": "Roles",
+          "attributes": [
+            { "id": "name", "kind": "string", "required": true }
+          ]
+        },
+        {
+          "id": "user_roles",
+          "name": "UserRoles",
+          "attributes": [
+            { "id": "userId", "kind": "relationship", "required": true },
+            { "id": "roleId", "kind": "relationship", "required": true }
+          ]
+        }
+      ]
+    }
+    "#;
+
     #[test]
     fn validates_project_spec() {
         let spec = parse_project_spec(SPEC).expect("spec should parse");
@@ -1434,5 +1865,20 @@ mod tests {
                 .contains("resolvers: { profile_label : crate::resolvers::resolve_profile_label }")
         );
         assert!(output.contains("pub fn registry() -> Result<StaticRegistry, DatabaseError>"));
+    }
+
+    #[test]
+    fn generates_many_to_many_relationship_metadata() {
+        let spec = parse_project_spec(MANY_TO_MANY_SPEC).expect("spec should parse");
+        validate_project_spec(&spec).expect("many-to-many spec should be valid");
+        let output = generate(&spec).expect("code should generate");
+
+        assert!(output.contains(
+            "pub const USER_ROLES_REL: nx_db::Rel<User, Role> = nx_db::Rel::<User, Role>::many_to_many(\"roles\", \"user_roles\", \"userId\", \"roleId\")"
+        ));
+        assert!(output.contains("pub roles: nx_db::RelationMany<RoleEntity>"));
+        assert!(output.contains("through_collection: Some(\"user_roles\")"));
+        assert!(output.contains("through_local_field: Some(\"userId\")"));
+        assert!(output.contains("through_remote_field: Some(\"roleId\")"));
     }
 }

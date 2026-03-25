@@ -113,6 +113,9 @@
         },
         "twoWay": { "type": "boolean", "default": false },
         "twoWayKey": { "type": "string" },
+        "throughCollection": { "type": "string" },
+        "throughLocalField": { "type": "string" },
+        "throughRemoteField": { "type": "string" },
         "onDelete": {
           "type": "string",
           "enum": ["setnull", "cascade", "restrict"],

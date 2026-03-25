@@ -237,7 +237,9 @@ async fn actual_postgres_repo_flow_and_document_security() -> Result<(), Box<dyn
         assert_eq!(updated.email.as_deref(), Some("updated@example.com"));
 
         let main_permissions: Vec<String> = sqlx::query_scalar(&format!(
-            "SELECT _permissions FROM \"{schema}\".\"restricted_users\" WHERE _uid = $1"
+            "SELECT {} FROM \"{schema}\".\"restricted_users\" WHERE {} = $1",
+            nx_db::COLUMN_PERMISSIONS,
+            nx_db::COLUMN_ID,
         ))
         .bind("doc_reader")
         .fetch_optional(&pool)
@@ -266,7 +268,9 @@ async fn actual_postgres_repo_flow_and_document_security() -> Result<(), Box<dyn
             .await?;
 
         let main_permissions: Vec<String> = sqlx::query_scalar(&format!(
-            "SELECT _permissions FROM \"{schema}\".\"restricted_users\" WHERE _uid = $1"
+            "SELECT {} FROM \"{schema}\".\"restricted_users\" WHERE {} = $1",
+            nx_db::COLUMN_PERMISSIONS,
+            nx_db::COLUMN_ID,
         ))
         .bind("doc_reader")
         .fetch_one(&pool)
@@ -274,7 +278,9 @@ async fn actual_postgres_repo_flow_and_document_security() -> Result<(), Box<dyn
         assert!(main_permissions.contains(&"read(\"user:reader\")".to_string()));
 
         let perms_row: Vec<String> = sqlx::query_scalar(&format!(
-            "SELECT permissions FROM \"{schema}\".\"restricted_users_perms\" WHERE permission_type = $1 AND document_id = (SELECT _id FROM \"{schema}\".\"restricted_users\" WHERE _uid = $2)"
+            "SELECT permissions FROM \"{schema}\".\"restricted_users_perms\" WHERE permission_type = $1 AND document_id = (SELECT {} FROM \"{schema}\".\"restricted_users\" WHERE {} = $2)",
+            nx_db::COLUMN_SEQUENCE,
+            nx_db::COLUMN_ID,
         ))
         .bind("read")
         .bind("doc_reader")

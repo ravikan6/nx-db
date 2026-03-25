@@ -364,6 +364,70 @@ pub enum Populated<T> {
     Loaded(Option<T>),
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum RelationOne<T> {
+    NotLoaded,
+    Loaded(Option<T>),
+}
+
+impl<T> Default for RelationOne<T> {
+    fn default() -> Self {
+        Self::NotLoaded
+    }
+}
+
+impl<T> RelationOne<T> {
+    pub fn get(&self) -> Option<&T> {
+        match self {
+            Self::Loaded(Some(value)) => Some(value),
+            _ => None,
+        }
+    }
+
+    pub fn into_loaded(self) -> Option<T> {
+        match self {
+            Self::Loaded(value) => value,
+            Self::NotLoaded => None,
+        }
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        !matches!(self, Self::NotLoaded)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RelationMany<T> {
+    NotLoaded,
+    Loaded(Vec<T>),
+}
+
+impl<T> Default for RelationMany<T> {
+    fn default() -> Self {
+        Self::NotLoaded
+    }
+}
+
+impl<T> RelationMany<T> {
+    pub fn as_slice(&self) -> Option<&[T]> {
+        match self {
+            Self::Loaded(values) => Some(values.as_slice()),
+            Self::NotLoaded => None,
+        }
+    }
+
+    pub fn into_loaded(self) -> Option<Vec<T>> {
+        match self {
+            Self::Loaded(values) => Some(values),
+            Self::NotLoaded => None,
+        }
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        !matches!(self, Self::NotLoaded)
+    }
+}
+
 impl<T> Default for Populated<T> {
     fn default() -> Self {
         Self::NotLoaded
@@ -411,7 +475,33 @@ impl<T: serde::Serialize> serde::Serialize for Populated<T> {
 impl<'de, T: serde::de::DeserializeOwned> serde::Deserialize<'de> for Populated<T> {
     /// Always deserialises as `NotLoaded` regardless of the stored value.
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let _ = serde::de::IgnoredAny::deserialize(d)?;
+        let _ = Option::<()>::deserialize(d)?;
+        Ok(Self::NotLoaded)
+    }
+}
+
+impl<T: serde::Serialize> serde::Serialize for RelationOne<T> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_none()
+    }
+}
+
+impl<'de, T: serde::de::DeserializeOwned> serde::Deserialize<'de> for RelationOne<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let _ = Option::<()>::deserialize(d)?;
+        Ok(Self::NotLoaded)
+    }
+}
+
+impl<T: serde::Serialize> serde::Serialize for RelationMany<T> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_none()
+    }
+}
+
+impl<'de, T: serde::de::DeserializeOwned> serde::Deserialize<'de> for RelationMany<T> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let _ = Option::<()>::deserialize(d)?;
         Ok(Self::NotLoaded)
     }
 }
@@ -437,6 +527,64 @@ impl<Context, T: bincode::Decode<Context>> bincode::Decode<Context> for Populate
 
 impl<'de, Context, T: bincode::BorrowDecode<'de, Context>> bincode::BorrowDecode<'de, Context>
     for Populated<T>
+{
+    fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let _ = u8::borrow_decode(decoder)?;
+        Ok(Self::NotLoaded)
+    }
+}
+
+impl<T: bincode::Encode> bincode::Encode for RelationOne<T> {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        0u8.encode(encoder)
+    }
+}
+
+impl<Context, T: bincode::Decode<Context>> bincode::Decode<Context> for RelationOne<T> {
+    fn decode<D: bincode::de::Decoder<Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let _ = u8::decode(decoder)?;
+        Ok(Self::NotLoaded)
+    }
+}
+
+impl<'de, Context, T: bincode::BorrowDecode<'de, Context>> bincode::BorrowDecode<'de, Context>
+    for RelationOne<T>
+{
+    fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let _ = u8::borrow_decode(decoder)?;
+        Ok(Self::NotLoaded)
+    }
+}
+
+impl<T: bincode::Encode> bincode::Encode for RelationMany<T> {
+    fn encode<E: bincode::enc::Encoder>(
+        &self,
+        encoder: &mut E,
+    ) -> Result<(), bincode::error::EncodeError> {
+        0u8.encode(encoder)
+    }
+}
+
+impl<Context, T: bincode::Decode<Context>> bincode::Decode<Context> for RelationMany<T> {
+    fn decode<D: bincode::de::Decoder<Context = Context>>(
+        decoder: &mut D,
+    ) -> Result<Self, bincode::error::DecodeError> {
+        let _ = u8::decode(decoder)?;
+        Ok(Self::NotLoaded)
+    }
+}
+
+impl<'de, Context, T: bincode::BorrowDecode<'de, Context>> bincode::BorrowDecode<'de, Context>
+    for RelationMany<T>
 {
     fn borrow_decode<D: bincode::de::BorrowDecoder<'de, Context = Context>>(
         decoder: &mut D,

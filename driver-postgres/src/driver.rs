@@ -2,11 +2,14 @@ use crate::query::PostgresQuery;
 use crate::utils::PostgresUtils;
 use database_core::errors::DatabaseError;
 use database_core::query::QuerySpec;
-use database_core::traits::storage::{AdapterFuture, StorageAdapter, StorageRecord, StorageValue};
+use database_core::traits::storage::{
+    AdapterFuture, JoinedStorageRecord, PopulatedStorageRow, StorageAdapter, StoragePopulate,
+    StorageRecord, StorageRelation, StorageValue,
+};
 use database_core::utils::PermissionEnum;
 use database_core::{
     AttributeKind, CollectionSchema, Context, FIELD_CREATED_AT, FIELD_ID, FIELD_PERMISSIONS,
-    FIELD_SEQUENCE, FIELD_UPDATED_AT,
+    FIELD_SEQUENCE, FIELD_UPDATED_AT, RelationshipKind,
 };
 use sqlx::{Pool, Postgres, QueryBuilder, Row};
 
@@ -724,6 +727,456 @@ impl StorageAdapter for PostgresAdapter {
             rows.into_iter()
                 .map(|r| PostgresUtils::row_to_record_internal(&r, schema))
                 .collect()
+        })
+    }
+
+    fn find_related(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        related_schema: &'static CollectionSchema,
+        query: &QuerySpec,
+        relation: StorageRelation,
+    ) -> AdapterFuture<'_, Result<Option<Vec<JoinedStorageRecord>>, DatabaseError>> {
+        let pool = self.pool.clone();
+        let context = context.clone();
+        let query = query.clone();
+        Box::pin(async move {
+            let base_table = PostgresUtils::qualified_table_name(&context, schema.id)?;
+            let related_table = PostgresUtils::qualified_table_name(&context, related_schema.id)?;
+            let base_select = PostgresUtils::select_columns_for_alias(schema, "main", "base")?;
+            let related_select =
+                PostgresUtils::select_columns_for_alias(related_schema, "rel", "rel")?;
+            let use_base_subquery = matches!(
+                relation.kind,
+                RelationshipKind::OneToMany | RelationshipKind::ManyToMany
+            );
+
+            let mut builder = QueryBuilder::<Postgres>::new(format!(
+                "SELECT {base_select}, {related_select} FROM "
+            ));
+            if use_base_subquery {
+                builder.push("(SELECT ");
+                builder.push(PostgresUtils::select_columns(schema)?);
+                builder.push(format!(" FROM {base_table} AS main"));
+                let mut has_where = false;
+                PostgresQuery::push_document_action_condition(
+                    &mut builder,
+                    &context,
+                    schema,
+                    "main",
+                    PermissionEnum::Read,
+                    &mut has_where,
+                )?;
+                PostgresQuery::push_filters_for_alias(
+                    &mut builder,
+                    schema,
+                    &query,
+                    Some("main"),
+                    &mut has_where,
+                )?;
+                PostgresQuery::push_sorts_for_alias(&mut builder, schema, &query, Some("main"))?;
+                if let Some(limit) = query.limit_value() {
+                    builder.push(" LIMIT ");
+                    builder.push_bind(limit as i64);
+                }
+                if let Some(offset) = query.offset_value() {
+                    builder.push(" OFFSET ");
+                    builder.push_bind(offset as i64);
+                }
+                builder.push(") AS main ");
+            } else {
+                builder.push(format!("{base_table} AS main "));
+            }
+
+            match relation.kind {
+                RelationshipKind::ManyToOne
+                | RelationshipKind::OneToOne
+                | RelationshipKind::OneToMany => {
+                    let base_join_column = PostgresUtils::qualified_column_for_field(
+                        schema,
+                        relation.local_field,
+                        Some("main"),
+                    )?;
+                    let related_join_column = PostgresUtils::qualified_column_for_field(
+                        related_schema,
+                        relation.remote_field,
+                        Some("rel"),
+                    )?;
+                    builder.push(format!(
+                        "LEFT JOIN {related_table} AS rel ON {base_join_column} = {related_join_column} AND "
+                    ));
+                    PostgresQuery::push_document_action_expression(
+                        &mut builder,
+                        &context,
+                        related_schema,
+                        "rel",
+                        PermissionEnum::Read,
+                    )?;
+                }
+                RelationshipKind::ManyToMany => {
+                    let through = relation.through.ok_or_else(|| {
+                        DatabaseError::Other(
+                            "many-to-many relation is missing through metadata".into(),
+                        )
+                    })?;
+                    let through_table =
+                        PostgresUtils::qualified_table_name(&context, through.schema.id)?;
+                    let base_join_column = PostgresUtils::qualified_column_for_field(
+                        schema,
+                        relation.local_field,
+                        Some("main"),
+                    )?;
+                    let through_local_column = PostgresUtils::qualified_column_for_field(
+                        through.schema,
+                        through.local_field,
+                        Some("jt"),
+                    )?;
+                    let through_remote_column = PostgresUtils::qualified_column_for_field(
+                        through.schema,
+                        through.remote_field,
+                        Some("jt"),
+                    )?;
+                    let related_join_column = PostgresUtils::qualified_column_for_field(
+                        related_schema,
+                        relation.remote_field,
+                        Some("rel"),
+                    )?;
+                    builder.push(format!(
+                        "LEFT JOIN {through_table} AS jt ON {base_join_column} = {through_local_column} AND "
+                    ));
+                    PostgresQuery::push_document_action_expression(
+                        &mut builder,
+                        &context,
+                        through.schema,
+                        "jt",
+                        PermissionEnum::Read,
+                    )?;
+                    builder.push(format!(
+                        " LEFT JOIN {related_table} AS rel ON {through_remote_column} = {related_join_column} AND "
+                    ));
+                    PostgresQuery::push_document_action_expression(
+                        &mut builder,
+                        &context,
+                        related_schema,
+                        "rel",
+                        PermissionEnum::Read,
+                    )?;
+                }
+            }
+
+            if !use_base_subquery {
+                let mut has_where = false;
+                PostgresQuery::push_document_action_condition(
+                    &mut builder,
+                    &context,
+                    schema,
+                    "main",
+                    PermissionEnum::Read,
+                    &mut has_where,
+                )?;
+                PostgresQuery::push_filters_for_alias(
+                    &mut builder,
+                    schema,
+                    &query,
+                    Some("main"),
+                    &mut has_where,
+                )?;
+            }
+
+            if !query.sorts().is_empty() {
+                PostgresQuery::push_sorts_for_alias(&mut builder, schema, &query, Some("main"))?;
+                if use_base_subquery {
+                    builder.push(", ");
+                    builder.push(format!(
+                        "rel.{} ASC",
+                        PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?
+                    ));
+                }
+            } else if use_base_subquery {
+                builder.push(" ORDER BY ");
+                builder.push(format!(
+                    "main.{} ASC, rel.{} ASC",
+                    PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?,
+                    PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?,
+                ));
+            }
+
+            if !use_base_subquery {
+                if let Some(limit) = query.limit_value() {
+                    builder.push(" LIMIT ");
+                    builder.push_bind(limit as i64);
+                }
+                if let Some(offset) = query.offset_value() {
+                    builder.push(" OFFSET ");
+                    builder.push_bind(offset as i64);
+                }
+            }
+
+            let rows = builder
+                .build()
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+
+            let mut joined = Vec::with_capacity(rows.len());
+            for row in rows {
+                let Some(base) =
+                    PostgresUtils::row_to_record_internal_prefixed(&row, schema, Some("base"))?
+                else {
+                    continue;
+                };
+                let related = PostgresUtils::row_to_record_internal_prefixed(
+                    &row,
+                    related_schema,
+                    Some("rel"),
+                )?;
+                joined.push(JoinedStorageRecord { base, related });
+            }
+
+            Ok(Some(joined))
+        })
+    }
+
+    fn find_populated(
+        &self,
+        context: &Context,
+        schema: &'static CollectionSchema,
+        query: &QuerySpec,
+        populates: Vec<StoragePopulate>,
+    ) -> AdapterFuture<'_, Result<Option<Vec<PopulatedStorageRow>>, DatabaseError>> {
+        let pool = self.pool.clone();
+        let context = context.clone();
+        let query = query.clone();
+        Box::pin(async move {
+            if populates.is_empty() {
+                return Ok(None);
+            }
+
+            let base_table = PostgresUtils::qualified_table_name(&context, schema.id)?;
+            let mut select_parts = vec![PostgresUtils::select_columns_for_alias(
+                schema, "main", "base",
+            )?];
+            for (index, populate) in populates.iter().enumerate() {
+                let alias = format!("rel_{index}");
+                select_parts.push(PostgresUtils::select_columns_for_alias(
+                    populate.schema,
+                    &alias,
+                    &alias,
+                )?);
+            }
+
+            let use_base_subquery = populates.iter().any(|populate| {
+                matches!(
+                    populate.relation.kind,
+                    RelationshipKind::OneToMany | RelationshipKind::ManyToMany
+                )
+            });
+
+            let mut builder =
+                QueryBuilder::<Postgres>::new(format!("SELECT {} FROM ", select_parts.join(", ")));
+            if use_base_subquery {
+                builder.push("(SELECT ");
+                builder.push(PostgresUtils::select_columns(schema)?);
+                builder.push(format!(" FROM {base_table} AS main"));
+                let mut has_where = false;
+                PostgresQuery::push_document_action_condition(
+                    &mut builder,
+                    &context,
+                    schema,
+                    "main",
+                    PermissionEnum::Read,
+                    &mut has_where,
+                )?;
+                PostgresQuery::push_filters_for_alias(
+                    &mut builder,
+                    schema,
+                    &query,
+                    Some("main"),
+                    &mut has_where,
+                )?;
+                PostgresQuery::push_sorts_for_alias(&mut builder, schema, &query, Some("main"))?;
+                if let Some(limit) = query.limit_value() {
+                    builder.push(" LIMIT ");
+                    builder.push_bind(limit as i64);
+                }
+                if let Some(offset) = query.offset_value() {
+                    builder.push(" OFFSET ");
+                    builder.push_bind(offset as i64);
+                }
+                builder.push(") AS main ");
+            } else {
+                builder.push(format!("{base_table} AS main "));
+            }
+
+            for (index, populate) in populates.iter().enumerate() {
+                let relation = &populate.relation;
+                let related_table =
+                    PostgresUtils::qualified_table_name(&context, populate.schema.id)?;
+                let relation_alias = format!("rel_{index}");
+
+                match relation.kind {
+                    RelationshipKind::ManyToOne
+                    | RelationshipKind::OneToOne
+                    | RelationshipKind::OneToMany => {
+                        let base_join_column = PostgresUtils::qualified_column_for_field(
+                            schema,
+                            relation.local_field,
+                            Some("main"),
+                        )?;
+                        let related_join_column = PostgresUtils::qualified_column_for_field(
+                            populate.schema,
+                            relation.remote_field,
+                            Some(&relation_alias),
+                        )?;
+                        builder.push(format!(
+                            "LEFT JOIN {related_table} AS {relation_alias} ON {base_join_column} = {related_join_column} AND "
+                        ));
+                        PostgresQuery::push_document_action_expression(
+                            &mut builder,
+                            &context,
+                            populate.schema,
+                            &relation_alias,
+                            PermissionEnum::Read,
+                        )?;
+                    }
+                    RelationshipKind::ManyToMany => {
+                        let through = relation.through.as_ref().ok_or_else(|| {
+                            DatabaseError::Other(
+                                "many-to-many relation is missing through metadata".into(),
+                            )
+                        })?;
+                        let through_alias = format!("jt_{index}");
+                        let through_table =
+                            PostgresUtils::qualified_table_name(&context, through.schema.id)?;
+                        let base_join_column = PostgresUtils::qualified_column_for_field(
+                            schema,
+                            relation.local_field,
+                            Some("main"),
+                        )?;
+                        let through_local_column = PostgresUtils::qualified_column_for_field(
+                            through.schema,
+                            through.local_field,
+                            Some(&through_alias),
+                        )?;
+                        let through_remote_column = PostgresUtils::qualified_column_for_field(
+                            through.schema,
+                            through.remote_field,
+                            Some(&through_alias),
+                        )?;
+                        let related_join_column = PostgresUtils::qualified_column_for_field(
+                            populate.schema,
+                            relation.remote_field,
+                            Some(&relation_alias),
+                        )?;
+                        builder.push(format!(
+                            "LEFT JOIN {through_table} AS {through_alias} ON {base_join_column} = {through_local_column} AND "
+                        ));
+                        PostgresQuery::push_document_action_expression(
+                            &mut builder,
+                            &context,
+                            through.schema,
+                            &through_alias,
+                            PermissionEnum::Read,
+                        )?;
+                        builder.push(format!(
+                            " LEFT JOIN {related_table} AS {relation_alias} ON {through_remote_column} = {related_join_column} AND "
+                        ));
+                        PostgresQuery::push_document_action_expression(
+                            &mut builder,
+                            &context,
+                            populate.schema,
+                            &relation_alias,
+                            PermissionEnum::Read,
+                        )?;
+                    }
+                }
+                builder.push(" ");
+            }
+
+            if !use_base_subquery {
+                let mut has_where = false;
+                PostgresQuery::push_document_action_condition(
+                    &mut builder,
+                    &context,
+                    schema,
+                    "main",
+                    PermissionEnum::Read,
+                    &mut has_where,
+                )?;
+                PostgresQuery::push_filters_for_alias(
+                    &mut builder,
+                    schema,
+                    &query,
+                    Some("main"),
+                    &mut has_where,
+                )?;
+            }
+
+            if !query.sorts().is_empty() {
+                PostgresQuery::push_sorts_for_alias(&mut builder, schema, &query, Some("main"))?;
+                if use_base_subquery {
+                    for index in 0..populates.len() {
+                        builder.push(", ");
+                        builder.push(format!(
+                            "rel_{index}.{} ASC",
+                            PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?,
+                        ));
+                    }
+                }
+            } else if use_base_subquery {
+                builder.push(" ORDER BY ");
+                builder.push(format!(
+                    "main.{} ASC",
+                    PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?,
+                ));
+                for index in 0..populates.len() {
+                    builder.push(", ");
+                    builder.push(format!(
+                        "rel_{index}.{} ASC",
+                        PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?,
+                    ));
+                }
+            }
+
+            if !use_base_subquery {
+                if let Some(limit) = query.limit_value() {
+                    builder.push(" LIMIT ");
+                    builder.push_bind(limit as i64);
+                }
+                if let Some(offset) = query.offset_value() {
+                    builder.push(" OFFSET ");
+                    builder.push_bind(offset as i64);
+                }
+            }
+
+            let rows = builder
+                .build()
+                .fetch_all(&pool)
+                .await
+                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+
+            let mut populated_rows = Vec::with_capacity(rows.len());
+            for row in rows {
+                let Some(base) =
+                    PostgresUtils::row_to_record_internal_prefixed(&row, schema, Some("base"))?
+                else {
+                    continue;
+                };
+                let mut related = std::collections::BTreeMap::new();
+                for (index, populate) in populates.iter().enumerate() {
+                    let prefix = format!("rel_{index}");
+                    let record = PostgresUtils::row_to_record_internal_prefixed(
+                        &row,
+                        populate.schema,
+                        Some(&prefix),
+                    )?;
+                    related.insert(populate.name.to_string(), record);
+                }
+                populated_rows.push(PopulatedStorageRow { base, related });
+            }
+
+            Ok(Some(populated_rows))
         })
     }
 

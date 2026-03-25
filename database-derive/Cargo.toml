@@ -1,0 +1,15 @@
+[package]
+name = "database-derive"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Proc-macro derives for nx-db model record mappings."
+
+[lib]
+proc-macro = true
+
+[dependencies]
+proc-macro2 = "1.0.94"
+quote = "1.0.40"
+syn = { version = "2.0.100", features = ["full", "extra-traits"] }

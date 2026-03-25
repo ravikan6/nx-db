@@ -2,6 +2,7 @@
 members = [
     ".",
     "database-core",
+    "database-derive",
     "driver-postgres",
     "database-cache",
     "database-codegen",
@@ -27,6 +28,7 @@ readme = "README.md"
 
 [dependencies]
 database-core = { path = "database-core", version = "0.1.0" }
+database-derive = { path = "database-derive", version = "0.1.0" }
 database-cache = { path = "database-cache", version = "0.1.0" }
 serde = { version = "1.0.228", features = ["derive"] }
 sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "time"], optional = true }

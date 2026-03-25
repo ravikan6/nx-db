@@ -11,7 +11,9 @@ mod models {
     ));
 }
 
-use models::prod_models::{CreatePost, CreateUser, Post, User, registry};
+use models::prod_models::{
+    CreatePost, CreateUser, POST_AUTHOR_POPULATE, Post, USER_POSTS_POPULATE, User, registry,
+};
 
 struct Stats {
     label: String,
@@ -108,13 +110,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Connecting to database: {}...", url);
 
     if url.starts_with("postgres://") {
-        let pool = sqlx::PgPool::connect(&url).await?;
-        let db = Database::builder()
-            .with_adapter(nx_db::postgres::PostgresAdapter::new(pool.clone()))
-            .with_registry(registry()?)
-            .with_cache(nx_db::cache::MemoryCacheBackend::default())
-            .build()?;
-        run_benchmarks_pg(db, pool).await?;
+        #[cfg(feature = "postgres")]
+        {
+            let pool = sqlx::PgPool::connect(&url).await?;
+            let db = Database::builder()
+                .with_adapter(nx_db::postgres::PostgresAdapter::new(pool.clone()))
+                .with_registry(registry()?)
+                .with_cache(nx_db::cache::MemoryCacheBackend::default())
+                .build()?;
+            run_benchmarks_pg(db, pool).await?;
+        }
+        #[cfg(not(feature = "postgres"))]
+        {
+            return Err("benchmark binary was built without the `postgres` feature".into());
+        }
     } else if url.starts_with("sqlite:") {
         #[cfg(feature = "sqlite")]
         {
@@ -126,14 +135,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 .build()?;
             run_benchmarks_sqlite(db, pool).await?;
         }
+        #[cfg(not(feature = "sqlite"))]
+        {
+            return Err("benchmark binary was built without the `sqlite` feature".into());
+        }
+    } else {
+        return Err(format!("unsupported DATABASE_URL scheme: {url}").into());
     }
     Ok(())
 }
 
+#[cfg(feature = "postgres")]
 async fn run_benchmarks_pg(
     db: Database<nx_db::postgres::PostgresAdapter, nx_db::StaticRegistry>,
     pool: sqlx::PgPool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let ctx = db_context!(schema: "nuvix_bench", role: Role::any());
+    db.scope(ctx.clone())
+        .repo::<User>()
+        .create_collection()
+        .await?;
+    db.scope(ctx.clone())
+        .repo::<Post>()
+        .create_collection()
+        .await?;
+
     run_core_benchmarks(db, |p| Box::pin(async move {
         sqlx::query("TRUNCATE TABLE nuvix_bench.users, nuvix_bench.posts, nuvix_bench.users_perms, nuvix_bench.posts_perms CASCADE").execute(&p).await?;
         Ok(())
@@ -234,7 +260,32 @@ where
     }
     warm_stats.print();
 
-    separator("3. Relationship Loading");
+    separator("3. Query Workloads");
+    let mut find_stats = Stats::new("find filtered posts (250 rows)");
+    for _ in 0..50 {
+        let start = Instant::now();
+        let _: Vec<_> = post_repo
+            .find(db_query!(
+                filter: Post::CONTENT.text_search("benchmark"),
+                sort: Post::TITLE.asc(),
+                limit: 250
+            ))
+            .await?;
+        find_stats.push(start.elapsed());
+    }
+    find_stats.print();
+
+    let mut count_stats = Stats::new("count filtered posts");
+    for _ in 0..100 {
+        let start = Instant::now();
+        let _ = post_repo
+            .count(db_query!(filter: Post::CONTENT.text_search("benchmark")))
+            .await?;
+        count_stats.push(start.elapsed());
+    }
+    count_stats.print();
+
+    separator("4. Relationship Loading");
     let mut rel_stats = Stats::new("load_parent (100 posts)");
     for _ in 0..50 {
         let posts = post_repo.find(db_query!(limit: 100)).await?;
@@ -246,6 +297,60 @@ where
     }
     rel_stats.print();
 
+    let mut include_one_stats = Stats::new("query().populate(author) (100 posts)");
+    for _ in 0..50 {
+        let start = Instant::now();
+        let _: Vec<_> = post_repo
+            .query()
+            .limit(100)
+            .sort(Post::TITLE.asc())
+            .populate(POST_AUTHOR_POPULATE)
+            .all()
+            .await?;
+        include_one_stats.push(start.elapsed());
+    }
+    include_one_stats.print();
+
+    let mut include_many_stats = Stats::new("query().populate(posts) (25 users + posts)");
+    for _ in 0..50 {
+        let start = Instant::now();
+        let _: Vec<_> = user_repo
+            .query()
+            .limit(25)
+            .sort(User::NAME.asc())
+            .populate(USER_POSTS_POPULATE)
+            .all()
+            .await?;
+        include_many_stats.push(start.elapsed());
+    }
+    include_many_stats.print();
+
+    separator("5. Updates");
+    let mut update_stats = Stats::new("single document update");
+    for i in 0..200 {
+        let post = &all_posts[i % all_posts.len()];
+        let start = Instant::now();
+        let _ = post_repo
+            .update(
+                &post.id,
+                CreatePostUpdate::content_patch(Some(format!("content refresh {}", i))),
+            )
+            .await?;
+        update_stats.push(start.elapsed());
+    }
+    update_stats.print();
+
     separator("Complete");
     Ok(())
+}
+
+struct CreatePostUpdate;
+
+impl CreatePostUpdate {
+    fn content_patch(content: Option<String>) -> models::prod_models::UpdatePost {
+        models::prod_models::UpdatePost {
+            content: nx_db::Patch::set(content),
+            ..Default::default()
+        }
+    }
 }
