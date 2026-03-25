@@ -193,7 +193,7 @@ async fn run_benchmarks_sqlite(
                 let _ = sqlx::query("DELETE FROM posts").execute(&p).await;
                 let _ = sqlx::query("DELETE FROM users_perms").execute(&p).await;
                 let _ = sqlx::query("DELETE FROM posts_perms").execute(&p).await;
-                let _ = sqlx::query("VACUUM").execute(&p).await;
+                // let _ = sqlx::query("VACUUM").execute(&p).await;
                 Ok(())
             })
         },
@@ -324,8 +324,19 @@ where
         include_many_stats.push(start.elapsed());
     }
     include_many_stats.print();
+    separator("5. Relationship using IN (lazy load)");
+    let mut rel_stats = Stats::new("load_parent (100 posts)");
+    for _ in 0..50 {
+        let posts = post_repo.find(db_query!(limit: 100)).await?;
+        let start = Instant::now();
+        let _: std::collections::HashMap<String, _> = post_repo
+            .load_parent::<User>(&posts, |p| Some(p.author.clone()))
+            .await?;
+        rel_stats.push(start.elapsed());
+    }
+    rel_stats.print();
 
-    separator("5. Updates");
+    separator("6. Updates");
     let mut update_stats = Stats::new("single document update");
     for i in 0..200 {
         let post = &all_posts[i % all_posts.len()];
