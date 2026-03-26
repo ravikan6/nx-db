@@ -615,9 +615,27 @@ where
         Ok(entities.pop())
     }
 
+    /// Batch-populate relationships for a slice of entities.
+    pub async fn populate_many(&self, entities: &mut [M::Entity]) -> Result<(), DatabaseError>
+    where
+        M::Entity: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        M::populate_entities(entities, &self.context, self.database).await
+    }
+
     /// Count documents matching `query`.
     pub async fn count(&self, query: QuerySpec) -> Result<u64, DatabaseError> {
         self.database.count_models::<M>(&self.context, &query).await
+    }
+
+    /// Return all documents matching `query`, with relationships populated.
+    pub async fn find_including(&self, query: QuerySpec) -> Result<Vec<M::Entity>, DatabaseError>
+    where
+        M::Entity: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        let mut entities = self.find(query).await?;
+        self.populate_many(&mut entities).await?;
+        Ok(entities)
     }
 
     /// Batch-populate relationships for a slice of entities.

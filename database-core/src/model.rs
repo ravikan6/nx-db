@@ -1,7 +1,8 @@
 use crate::context::Context;
 use crate::errors::DatabaseError;
 use crate::schema::CollectionSchema;
-use crate::traits::storage::StorageRecord;
+use crate::traits::storage::{StorageRecord, StorageValue};
+use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use time::OffsetDateTime;
@@ -97,10 +98,11 @@ pub trait Model: Copy + Send + Sync + 'static {
     }
 
     fn populate_entities<'a>(
-        _entities: &'a mut [Self::Entity],
-        _context: &'a Context,
-        _db: &'a dyn PopulateContext,
+        entities: &'a mut [Self::Entity],
+        context: &'a Context,
+        db: &'a dyn PopulateContext,
     ) -> ModelFuture<'a, Result<(), DatabaseError>> {
+        let _ = (entities, context, db);
         Box::pin(async move { Ok(()) })
     }
 
@@ -116,23 +118,12 @@ pub trait Model: Copy + Send + Sync + 'static {
 }
 
 pub trait PopulateContext: Send + Sync {
-    fn repo_for_population<'a, M: Model>(
+    fn populate_related<'a, M: Model>(
         &'a self,
-        context: &Context,
-    ) -> Box<dyn PopulationRepo<'a, M> + 'a>
+        context: &'a Context,
+        entities: &'a mut [M::Entity],
+        name: &'static str,
+    ) -> ModelFuture<'a, Result<(), DatabaseError>>
     where
         M::Entity: serde::Serialize + serde::de::DeserializeOwned;
-}
-
-pub trait PopulationRepo<'a, M: Model>: Send + Sync {
-    fn find_many(
-        &self,
-        ids: Vec<M::Id>,
-    ) -> ModelFuture<'_, Result<HashMap<String, M::Entity>, DatabaseError>>;
-
-    fn find_by_field(
-        &self,
-        field: &'static str,
-        values: Vec<StorageValue>,
-    ) -> ModelFuture<'_, Result<HashMap<String, Vec<M::Entity>>, DatabaseError>>;
 }

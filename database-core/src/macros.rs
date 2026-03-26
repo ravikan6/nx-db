@@ -353,29 +353,10 @@ macro_rules! impl_model {
             ) -> $crate::model::ModelFuture<'a, Result<(), $crate::errors::DatabaseError>> {
                 Box::pin(async move {
                     $($(
-                        let mut ids = Vec::new();
-                        for entity in entities.iter() {
-                            if let Some(id) = entity.$loaded_one_field.local_key() {
-                                if !ids.contains(id) {
-                                    ids.push(id.clone());
-                                }
-                            }
-                        }
-                        if !ids.is_empty() {
-                            let repo = db.repo_for_population::<$loaded_one_model>(context);
-                            let map = repo.find_many(ids.into_iter().map($crate::Key::new).collect::<Result<Vec<_>, _>>()?).await?;
-                            for entity in entities.iter_mut() {
-                                if let Some(id) = entity.$loaded_one_field.local_key() {
-                                    entity.$loaded_one_field = $crate::RelationOne::Loaded(map.get(id).cloned());
-                                }
-                            }
-                            // Recursive population if needed could be added here
-                        }
+                        db.populate_related::<$loaded_one_model>(context, entities, stringify!($loaded_one_field)).await?;
                     )*)?
-
                     $($(
-                        // Here we could use a convention or more metadata to find the foreign key field.
-                        // Assuming for this "ultra-fast" pass that we have a standard way to find children.
+                        db.populate_related::<$loaded_many_model>(context, entities, stringify!($loaded_many_field)).await?;
                     )*)?
                     Ok(())
                 })
