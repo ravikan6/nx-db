@@ -10,6 +10,10 @@ use std::collections::BTreeMap;
 
 pub enum MigrationChange {
     CreateTable(String),
+    CreateEnum {
+        name: String,
+        elements: Vec<String>,
+    },
     AddColumn {
         table: String,
         column: String,
@@ -100,17 +104,51 @@ impl<'a> MigrationEngine<'a> {
 
         let existing_columns: BTreeMap<String, String> = columns.into_iter().collect();
 
+        // Check enums
+        let existing_types: Vec<String> = sqlx::query(
+            "SELECT t.typname FROM pg_type t JOIN pg_namespace n ON t.typnamespace = n.oid WHERE n.nspname = $1"
+        )
+        .bind(db_schema)
+        .fetch_all(self.pool)
+        .await
+        .map_err(|e| DatabaseError::Other(format!("failed to fetch types: {e}")))?
+        .into_iter()
+        .map(|row| row.get(0))
+        .collect();
+
         for attr in collection.attributes() {
-            if attr.persistence == AttributePersistence::Persisted
-                && !existing_columns.contains_key(&attr.column)
-            {
-                changes.push(MigrationChange::AddColumn {
-                    table: table_name.to_string(),
-                    column: attr.column.to_string(),
-                    sql_type: PostgresAdapter::sql_type(attr.kind, attr.array, attr.length),
-                    required: attr.required,
-                    default: attr.default,
-                });
+            if attr.persistence == AttributePersistence::Persisted {
+                let custom_type_name = if attr.kind == database_core::AttributeKind::Enum {
+                    let type_name =
+                        crate::utils::PostgresUtils::enum_type_name(collection.id(), &attr.id);
+                    if !existing_types.contains(&type_name) {
+                        if let Some(elements) = &attr.elements {
+                            changes.push(MigrationChange::CreateEnum {
+                                name: type_name.clone(),
+                                elements: elements.clone(),
+                            });
+                        }
+                    }
+                    let schema_name = crate::utils::PostgresUtils::quote_identifier(db_schema)?;
+                    Some(format!("{}.{}", schema_name, type_name))
+                } else {
+                    None
+                };
+
+                if !existing_columns.contains_key(&attr.column) {
+                    changes.push(MigrationChange::AddColumn {
+                        table: table_name.to_string(),
+                        column: attr.column.to_string(),
+                        sql_type: PostgresAdapter::sql_type(
+                            attr.kind,
+                            attr.array,
+                            attr.length,
+                            custom_type_name.as_deref(),
+                        ),
+                        required: attr.required,
+                        default: attr.default,
+                    });
+                }
             }
         }
 
@@ -191,6 +229,22 @@ impl<'a> MigrationEngine<'a> {
                             ))
                         })?;
                 self.create_collection_generic(context, *collection).await
+            }
+            MigrationChange::CreateEnum { name, elements } => {
+                let schema_name = crate::utils::PostgresUtils::quote_identifier(context.schema())?;
+                let full_type_name = format!("{}.{}", schema_name, name);
+                let elements_str = elements
+                    .iter()
+                    .map(|e| format!("'{}'", e.replace('\'', "''")))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let sql = format!("CREATE TYPE {} AS ENUM ({})", full_type_name, elements_str);
+                println!("Executing: {}", sql);
+                self.pool
+                    .execute(sql.as_str())
+                    .await
+                    .map_err(|e| DatabaseError::Other(format!("failed to create enum type: {e}")))?;
+                Ok(())
             }
             MigrationChange::AddColumn {
                 table,
@@ -276,8 +330,35 @@ impl<'a> MigrationEngine<'a> {
 
         for attr in collection.attributes() {
             if attr.persistence == AttributePersistence::Persisted {
+                let custom_type = if attr.kind == database_core::AttributeKind::Enum {
+                    let type_name =
+                        crate::utils::PostgresUtils::enum_type_name(collection.id(), &attr.id);
+                    let schema_name =
+                        crate::utils::PostgresUtils::quote_identifier(context.schema())?;
+                    let full_type_name = format!("{}.{}", schema_name, type_name);
+                    if let Some(elements) = attr.elements {
+                        let elements_str = elements
+                            .iter()
+                            .map(|e| format!("'{}'", e.replace('\'', "''")))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        statements.push(format!(
+                            "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON t.typnamespace = n.oid WHERE t.typname = '{}' AND n.nspname = '{}') THEN CREATE TYPE {} AS ENUM ({}); END IF; END $$;",
+                            type_name, context.schema(), full_type_name, elements_str
+                        ));
+                    }
+                    Some(full_type_name)
+                } else {
+                    None
+                };
+
                 let column = PostgresAdapter::quote_identifier(&attr.column)?;
-                let sql_type = PostgresAdapter::sql_type(attr.kind, attr.array, attr.length);
+                let sql_type = PostgresAdapter::sql_type(
+                    attr.kind,
+                    attr.array,
+                    attr.length,
+                    custom_type.as_deref(),
+                );
                 let nullable = if attr.required { "NOT NULL" } else { "" };
                 statements.push(format!(
                     "ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {sql_type} {nullable}"

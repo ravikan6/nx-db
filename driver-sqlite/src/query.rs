@@ -22,7 +22,7 @@ impl SqliteQuery {
             StorageValue::Float(v) => {
                 builder.push_bind(*v);
             }
-            StorageValue::String(v) | StorageValue::Json(v) => {
+            StorageValue::String(v) | StorageValue::Json(v) | StorageValue::Enum(v) => {
                 builder.push_bind(v.clone());
             }
             StorageValue::Timestamp(v) => {
@@ -40,7 +40,7 @@ impl SqliteQuery {
             StorageValue::FloatArray(v) => {
                 builder.push_bind(serde_json::to_string(v).unwrap());
             }
-            StorageValue::StringArray(v) => {
+            StorageValue::StringArray(v) | StorageValue::EnumArray(v) => {
                 builder.push_bind(serde_json::to_string(v).unwrap());
             }
             StorageValue::TimestampArray(v) => {
@@ -76,7 +76,7 @@ impl SqliteQuery {
             StorageValue::Float(v) => {
                 sep.push_bind(*v);
             }
-            StorageValue::String(v) | StorageValue::Json(v) => {
+            StorageValue::String(v) | StorageValue::Json(v) | StorageValue::Enum(v) => {
                 sep.push_bind(v.clone());
             }
             StorageValue::Timestamp(v) => {
@@ -94,7 +94,7 @@ impl SqliteQuery {
             StorageValue::FloatArray(v) => {
                 sep.push_bind(serde_json::to_string(v).unwrap());
             }
-            StorageValue::StringArray(v) => {
+            StorageValue::StringArray(v) | StorageValue::EnumArray(v) => {
                 sep.push_bind(serde_json::to_string(v).unwrap());
             }
             StorageValue::TimestampArray(v) => {

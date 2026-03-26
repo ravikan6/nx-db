@@ -102,7 +102,7 @@ pub use database_core::{
 
 // ── Macro re-exports ──────────────────────────────────────────────────────────
 pub use database_core::{
-    and, db_context, db_query, db_registry, impl_create_builder, impl_model,
+    and, db_context, db_query, db_registry, impl_create_builder, impl_enum, impl_model,
     impl_model_record_bridge, not, or,
 };
 

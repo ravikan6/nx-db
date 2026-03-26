@@ -83,8 +83,13 @@
             "timestamp",
             "relationship",
             "virtual",
-            "json"
+            "json",
+            "enum"
           ]
+        },
+        "elements": {
+          "type": "array",
+          "items": { "type": "string" }
         },
         "required": { "type": "boolean", "default": false },
         "array": { "type": "boolean", "default": false },

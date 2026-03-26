@@ -114,6 +114,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         nx_db::postgres::migration::MigrationChange::CreateTable(id) => {
                             println!("  - Create table {}", id);
                         }
+                        nx_db::postgres::migration::MigrationChange::CreateEnum { name, .. } => {
+                            println!("  - Create enum {}", name);
+                        }
                         nx_db::postgres::migration::MigrationChange::AddColumn {
                             table,
                             column,

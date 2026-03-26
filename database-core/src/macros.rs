@@ -111,6 +111,58 @@ macro_rules! db_query {
     };
 }
 
+/// Generate a type-safe enum for a collection attribute.
+///
+/// This macro implements common traits needed for database integration:
+/// `Display`, `FromStr`, `Serialize`, `Deserialize`, `IntoStorage`, and `FromStorage`.
+#[macro_export]
+macro_rules! impl_enum {
+    (
+        name: $name:ident,
+        variants: { $($variant:ident => $string:expr),* $(,)? }
+    ) => {
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, ::serde::Serialize, ::serde::Deserialize)]
+        #[serde(rename_all = "lowercase")]
+        pub enum $name {
+            $($variant),*
+        }
+
+        impl std::fmt::Display for $name {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                match self {
+                    $(Self::$variant => write!(f, $string)),*
+                }
+            }
+        }
+
+        impl std::str::FromStr for $name {
+            type Err = $crate::errors::DatabaseError;
+            fn from_str(s: &str) -> Result<Self, Self::Err> {
+                match s {
+                    $($string => Ok(Self::$variant),)*
+                    _ => Err($crate::errors::DatabaseError::Other(format!("invalid enum value for {}: {}", stringify!($name), s))),
+                }
+            }
+        }
+
+        impl $crate::IntoStorage for $name {
+            fn into_storage(self) -> $crate::traits::storage::StorageValue {
+                $crate::traits::storage::StorageValue::Enum(self.to_string())
+            }
+        }
+
+        impl $crate::FromStorage for $name {
+            fn from_storage(value: $crate::traits::storage::StorageValue) -> Result<Self, $crate::errors::DatabaseError> {
+                match value {
+                    $crate::traits::storage::StorageValue::Enum(s) => s.parse(),
+                    $crate::traits::storage::StorageValue::String(s) => s.parse(),
+                    _ => Err($crate::errors::DatabaseError::Other(format!("expected enum storage value, got {:?}", value))),
+                }
+            }
+        }
+    };
+}
+
 /// Generate builder helpers for a generated `Create*` payload.
 ///
 /// This keeps generated code compact while preserving required constructor

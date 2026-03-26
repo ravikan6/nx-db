@@ -11,6 +11,7 @@ pub enum AttributeKind {
     Relationship,
     Virtual,
     Json,
+    Enum,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

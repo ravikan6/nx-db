@@ -31,8 +31,9 @@ impl PostgresAdapter {
         kind: database_core::AttributeKind,
         array: bool,
         length: Option<usize>,
+        custom_type: Option<&str>,
     ) -> String {
-        PostgresUtils::sql_type(kind, array, length)
+        PostgresUtils::sql_type(kind, array, length, custom_type)
     }
 
     pub fn qualified_table_name(
@@ -103,8 +104,34 @@ impl StorageAdapter for PostgresAdapter {
                 format!("{updated_col} TIMESTAMPTZ NOT NULL DEFAULT NOW()"),
                 format!("{perms_col} TEXT[] NOT NULL DEFAULT '{{}}'"),
             ];
+            let mut enum_statements = Vec::new();
             for attr in schema.persisted_attributes() {
-                let sql_type = PostgresUtils::sql_type(attr.kind, attr.array, attr.length);
+                let custom_type = if attr.kind == AttributeKind::Enum {
+                    let type_name = PostgresUtils::enum_type_name(schema.id, attr.id);
+                    let schema_name = PostgresUtils::quote_identifier(context.schema())?;
+                    let full_type_name = format!("{}.{}", schema_name, type_name);
+                    if let Some(elements) = attr.elements {
+                        let elements_str = elements
+                            .iter()
+                            .map(|e| format!("'{}'", e.replace('\'', "''")))
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        enum_statements.push(format!(
+                            "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON t.typnamespace = n.oid WHERE t.typname = '{}' AND n.nspname = '{}') THEN CREATE TYPE {} AS ENUM ({}); END IF; END $$;",
+                            type_name, context.schema(), full_type_name, elements_str
+                        ));
+                    }
+                    Some(full_type_name)
+                } else {
+                    None
+                };
+
+                let sql_type = PostgresUtils::sql_type(
+                    attr.kind,
+                    attr.array,
+                    attr.length,
+                    custom_type.as_deref(),
+                );
                 let not_null = if attr.required { " NOT NULL" } else { "" };
                 let default_clause = PostgresUtils::sql_default(attr.default);
                 cols.push(format!(
@@ -224,6 +251,13 @@ impl StorageAdapter for PostgresAdapter {
                 .begin()
                 .await
                 .map_err(|e| DatabaseError::Other(e.to_string()))?;
+
+            for stmt in &enum_statements {
+                sqlx::query(stmt)
+                    .execute(&mut *tx)
+                    .await
+                    .map_err(|e| DatabaseError::Other(format!("Enum creation failed ({stmt}): {e}")))?;
+            }
 
             let ddl_statements: &[&str] = &[
                 schema_sql.as_str(),

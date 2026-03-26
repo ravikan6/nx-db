@@ -207,6 +207,12 @@ impl PostgresQuery {
             StorageValue::StringArray(v) => {
                 builder.push_bind(v.clone());
             }
+            StorageValue::Enum(v) => {
+                builder.push_bind(v.clone());
+            }
+            StorageValue::EnumArray(v) => {
+                builder.push_bind(v.clone());
+            }
             StorageValue::Bytes(v) => {
                 builder.push_bind(v.clone());
             }
@@ -252,6 +258,12 @@ impl PostgresQuery {
                 sep.push_bind(v.clone());
             }
             StorageValue::StringArray(v) => {
+                sep.push_bind(v.clone());
+            }
+            StorageValue::Enum(v) => {
+                sep.push_bind(v.clone());
+            }
+            StorageValue::EnumArray(v) => {
                 sep.push_bind(v.clone());
             }
             StorageValue::Bytes(v) => {

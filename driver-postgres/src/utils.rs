@@ -69,7 +69,16 @@ impl PostgresUtils {
         }
     }
 
-    pub fn sql_type(kind: AttributeKind, array: bool, length: Option<usize>) -> String {
+    pub fn enum_type_name(collection_id: &str, attribute_id: &str) -> String {
+        format!("enum_{}_{}", collection_id, attribute_id)
+    }
+
+    pub fn sql_type(
+        kind: AttributeKind,
+        array: bool,
+        length: Option<usize>,
+        custom_type: Option<&str>,
+    ) -> String {
         let base = match kind {
             AttributeKind::String | AttributeKind::Relationship | AttributeKind::Virtual => {
                 if let Some(len) = length {
@@ -83,8 +92,13 @@ impl PostgresUtils {
             AttributeKind::Boolean => "BOOLEAN".to_string(),
             AttributeKind::Timestamp => "TIMESTAMPTZ".to_string(),
             AttributeKind::Json => "JSONB".to_string(),
+            AttributeKind::Enum => custom_type.unwrap_or("TEXT").to_string(),
         };
-        if array { format!("{base}[]") } else { base }
+        if array {
+            format!("{base}[]")
+        } else {
+            base
+        }
     }
 
     pub fn column_for_field(
@@ -303,6 +317,9 @@ impl PostgresUtils {
                             v.map(StorageValue::TimestampArray)
                                 .unwrap_or(StorageValue::Null)
                         }),
+                    AttributeKind::Enum => row
+                        .try_get::<Option<Vec<String>>, _>(column)
+                        .map(|v| v.map(StorageValue::EnumArray).unwrap_or(StorageValue::Null)),
                     AttributeKind::Json => row
                         .try_get::<Option<Vec<sqlx::types::Json<serde_json::Value>>>, _>(column)
                         .map(|v| {
@@ -335,6 +352,9 @@ impl PostgresUtils {
                         .map(|v: Option<OffsetDateTime>| {
                             v.map(StorageValue::Timestamp).unwrap_or(StorageValue::Null)
                         }),
+                    AttributeKind::Enum => row
+                        .try_get::<Option<String>, _>(column)
+                        .map(|v| v.map(StorageValue::Enum).unwrap_or(StorageValue::Null)),
                     AttributeKind::Json => row
                         .try_get::<Option<sqlx::types::Json<serde_json::Value>>, _>(column)
                         .map(|v| {

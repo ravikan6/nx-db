@@ -79,7 +79,8 @@ impl SqliteUtils {
             AttributeKind::String
             | AttributeKind::Relationship
             | AttributeKind::Virtual
-            | AttributeKind::Json => "TEXT",
+            | AttributeKind::Json
+            | AttributeKind::Enum => "TEXT",
             AttributeKind::Integer | AttributeKind::Boolean => "INTEGER",
             AttributeKind::Float => "REAL",
             AttributeKind::Timestamp => "TEXT",
@@ -236,7 +237,8 @@ impl SqliteUtils {
                     AttributeKind::String
                     | AttributeKind::Relationship
                     | AttributeKind::Virtual
-                    | AttributeKind::Json => row
+                    | AttributeKind::Json
+                    | AttributeKind::Enum => row
                         .try_get::<Option<String>, _>(column)
                         .map(|v| v.map(StorageValue::String).unwrap_or(StorageValue::Null))
                         .unwrap_or(StorageValue::Null),
@@ -291,12 +293,22 @@ impl SqliteUtils {
                 AttributeKind::String
                 | AttributeKind::Relationship
                 | AttributeKind::Virtual
-                | AttributeKind::Json => Ok(StorageValue::StringArray(
-                    elems
-                        .into_iter()
-                        .map(|e| e.as_str().unwrap_or_default().to_string())
-                        .collect(),
-                )),
+                | AttributeKind::Json
+                | AttributeKind::Enum => Ok(if kind == AttributeKind::Enum {
+                    StorageValue::EnumArray(
+                        elems
+                            .into_iter()
+                            .map(|e| e.as_str().unwrap_or_default().to_string())
+                            .collect(),
+                    )
+                } else {
+                    StorageValue::StringArray(
+                        elems
+                            .into_iter()
+                            .map(|e| e.as_str().unwrap_or_default().to_string())
+                            .collect(),
+                    )
+                }),
                 AttributeKind::Integer => Ok(StorageValue::IntArray(
                     elems
                         .into_iter()
@@ -334,9 +346,14 @@ impl SqliteUtils {
             }
         } else {
             match kind {
-                AttributeKind::String | AttributeKind::Relationship | AttributeKind::Virtual => Ok(
-                    StorageValue::String(val.as_str().unwrap_or_default().to_string()),
-                ),
+                AttributeKind::String
+                | AttributeKind::Relationship
+                | AttributeKind::Virtual
+                | AttributeKind::Enum => Ok(if kind == AttributeKind::Enum {
+                    StorageValue::Enum(val.as_str().unwrap_or_default().to_string())
+                } else {
+                    StorageValue::String(val.as_str().unwrap_or_default().to_string())
+                }),
                 AttributeKind::Json => Ok(StorageValue::Json(val.to_string())),
                 AttributeKind::Integer => Ok(StorageValue::Int(val.as_i64().unwrap_or_default())),
                 AttributeKind::Boolean => Ok(StorageValue::Bool(val.as_bool().unwrap_or_default())),

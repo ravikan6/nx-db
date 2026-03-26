@@ -218,6 +218,8 @@ pub struct AttributeSchema {
     pub persistence: AttributePersistence,
     /// Named filter codecs that apply to this attribute.
     pub filters: &'static [&'static str],
+    /// Enum elements, set when `kind == AttributeKind::Enum`.
+    pub elements: Option<&'static [&'static str]>,
     /// Relationship metadata, set when `kind == AttributeKind::Relationship`.
     pub relationship: Option<RelationshipSchema>,
 }
@@ -266,6 +268,7 @@ impl crate::traits::migration::MigrationCollection for &'static CollectionSchema
                 length: a.length,
                 default: a.default,
                 persistence: a.persistence,
+                elements: a.elements.map(|e| e.iter().map(|s| s.to_string()).collect()),
             })
             .collect()
     }

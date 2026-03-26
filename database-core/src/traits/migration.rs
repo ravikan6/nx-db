@@ -16,6 +16,7 @@ pub struct MigrationAttribute {
     pub length: Option<usize>,
     pub default: Option<DefaultValue>,
     pub persistence: AttributePersistence,
+    pub elements: Option<Vec<String>>,
 }
 
 pub struct MigrationIndex {

@@ -93,6 +93,8 @@ pub struct AttributeSpec {
     pub column: Option<String>,
     pub kind: AttributeKindSpec,
     #[serde(default)]
+    pub elements: Option<Vec<String>>,
+    #[serde(default)]
     pub required: bool,
     #[serde(default)]
     pub array: bool,
@@ -162,6 +164,7 @@ pub enum AttributeKindSpec {
     Relationship,
     Virtual,
     Json,
+    Enum,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -321,6 +324,15 @@ pub fn validate_project_spec(spec: &ProjectSpec) -> Result<(), CodegenError> {
                 )));
             }
 
+            if attribute.kind == AttributeKindSpec::Enum {
+                if attribute.elements.as_ref().map(|e| e.is_empty()).unwrap_or(true) {
+                    return Err(CodegenError::Invalid(format!(
+                        "collection '{}': enum attribute '{}' must declare elements",
+                        collection.id, attribute.id
+                    )));
+                }
+            }
+
             if attribute.kind == AttributeKindSpec::Virtual {
                 if !attribute.filters.is_empty() {
                     return Err(CodegenError::Invalid(format!(
@@ -370,7 +382,7 @@ pub fn validate_project_spec(spec: &ProjectSpec) -> Result<(), CodegenError> {
 
             if !attribute.filters.is_empty() {
                 let chain = resolve_attribute_filters(&filters_by_name, collection, attribute)?;
-                let storage_type = storage_field_base_type(attribute.kind, attribute.array);
+                let storage_type = storage_field_base_type(collection, attribute);
 
                 if let Some(last) = chain.last() {
                     if last.encoded_type != storage_type {
@@ -526,6 +538,31 @@ pub fn generate(spec: &ProjectSpec) -> Result<String, CodegenError> {
     )
     .unwrap();
     writeln!(&mut out).unwrap();
+
+    for collection in &spec.collections {
+        for attribute in &collection.attributes {
+            if attribute.kind == AttributeKindSpec::Enum {
+                let enum_name = enum_type_name(collection, attribute);
+                let elements = attribute.elements.as_ref().unwrap();
+
+                writeln!(out, "    nx_db::impl_enum! {{").unwrap();
+                writeln!(out, "        name: {enum_name},").unwrap();
+                writeln!(out, "        variants: {{").unwrap();
+                for element in elements {
+                    writeln!(
+                        out,
+                        "            {} => \"{}\",",
+                        pascal_case(element),
+                        element
+                    )
+                    .unwrap();
+                }
+                writeln!(out, "        }}").unwrap();
+                writeln!(out, "    }}").unwrap();
+                writeln!(out).unwrap();
+            }
+        }
+    }
 
     for collection in &spec.collections {
         emit_collection(&mut out, spec, collection)?;
@@ -713,7 +750,7 @@ fn emit_collection(
         }
         let const_name = format!("{model_const}_{}", screaming_snake(&attribute.id));
         if attribute.filters.is_empty() {
-            let query_type = query_field_type(attribute);
+            let query_type = query_field_type(collection, attribute);
             if attribute.kind == AttributeKindSpec::Virtual {
                 continue;
             }
@@ -1053,6 +1090,22 @@ fn emit_collection(
                 .join(", ")
         )
         .unwrap();
+        writeln!(
+            out,
+            "            elements: {},",
+            attribute
+                .elements
+                .as_ref()
+                .map(|e| format!(
+                    "Some(&[{}])",
+                    e.iter()
+                        .map(|s| format!("\"{}\"", escape_string(s)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+                .unwrap_or_else(|| "None".to_string())
+        )
+        .unwrap();
         if let Some(rel) = &attribute.relationship {
             writeln!(
                 out,
@@ -1177,7 +1230,7 @@ fn emit_collection(
             writeln!(
                 out,
                 "        pub const {const_name}: Field<{model_name}, {}> = Field::new(\"{}\");",
-                query_field_type(attribute),
+                query_field_type(collection, attribute),
                 attribute.id
             )
             .unwrap();
@@ -1211,7 +1264,7 @@ fn emit_collection(
         }
         let field_id = &attribute.id;
         let field_name = rust_field_name(&attribute.id);
-        let storage_type = query_field_type(attribute);
+        let storage_type = query_field_type(collection, attribute);
         let required_flag = if attribute.required { " :required" } else { "" };
         if let Some(decoder) = attribute
             .filters
@@ -1285,6 +1338,7 @@ fn attribute_kind_expr(kind: AttributeKindSpec) -> &'static str {
         AttributeKindSpec::Relationship => "AttributeKind::Relationship",
         AttributeKindSpec::Virtual => "AttributeKind::Virtual",
         AttributeKindSpec::Json => "AttributeKind::Json",
+        AttributeKindSpec::Enum => "AttributeKind::Enum",
     }
 }
 
@@ -1329,21 +1383,33 @@ fn on_delete_action_expr(action: OnDeleteActionSpec) -> &'static str {
     }
 }
 
-fn storage_field_base_type(kind: AttributeKindSpec, array: bool) -> String {
-    let base = match kind {
-        AttributeKindSpec::String | AttributeKindSpec::Relationship => "String",
-        AttributeKindSpec::Integer => "i64",
-        AttributeKindSpec::Float => "f64",
-        AttributeKindSpec::Boolean => "bool",
-        AttributeKindSpec::Timestamp => "nx_db::time::OffsetDateTime",
-        AttributeKindSpec::Virtual | AttributeKindSpec::Json => "String",
+fn storage_field_base_type(
+    collection: &CollectionSpec,
+    attribute: &AttributeSpec,
+) -> String {
+    let base = match attribute.kind {
+        AttributeKindSpec::String | AttributeKindSpec::Relationship => "String".to_string(),
+        AttributeKindSpec::Integer => "i64".to_string(),
+        AttributeKindSpec::Float => "f64".to_string(),
+        AttributeKindSpec::Boolean => "bool".to_string(),
+        AttributeKindSpec::Timestamp => "nx_db::time::OffsetDateTime".to_string(),
+        AttributeKindSpec::Virtual | AttributeKindSpec::Json => "String".to_string(),
+        AttributeKindSpec::Enum => enum_type_name(collection, attribute),
     };
 
-    if array {
+    if attribute.array {
         format!("Vec<{base}>")
     } else {
-        base.to_string()
+        base
     }
+}
+
+fn enum_type_name(collection: &CollectionSpec, attribute: &AttributeSpec) -> String {
+    format!(
+        "{}{}",
+        pascal_case(&collection.id),
+        pascal_case(&attribute.id)
+    )
 }
 
 fn attribute_is_relation_many(attribute: &AttributeSpec) -> bool {
@@ -1456,7 +1522,7 @@ fn entity_field_type(
     }
 
     let base = if attribute.filters.is_empty() {
-        storage_field_base_type(attribute.kind, attribute.array)
+        storage_field_base_type(collection, attribute)
     } else {
         let filters_by_name: BTreeMap<&str, &FilterSpec> = spec
             .filters
@@ -1477,8 +1543,8 @@ fn entity_field_type(
     }
 }
 
-fn query_field_type(attribute: &AttributeSpec) -> String {
-    let base = storage_field_base_type(attribute.kind, attribute.array);
+fn query_field_type(collection: &CollectionSpec, attribute: &AttributeSpec) -> String {
+    let base = storage_field_base_type(collection, attribute);
     if attribute.required {
         base
     } else {
@@ -1564,8 +1630,8 @@ fn attribute_filter_helpers<'a>(
     let mut public_type = chain
         .first()
         .map(|filter| filter.decoded_type.clone())
-        .unwrap_or_else(|| storage_field_base_type(attribute.kind, attribute.array));
-    let mut storage_type = storage_field_base_type(attribute.kind, attribute.array);
+        .unwrap_or_else(|| storage_field_base_type(collection, attribute));
+    let mut storage_type = storage_field_base_type(collection, attribute);
 
     if !attribute.required {
         public_type = format!("Option<{}>", public_type);
@@ -1700,6 +1766,7 @@ impl database_core::traits::migration::MigrationCollection for CollectionSpec {
                     AttributeKindSpec::Relationship => database_core::AttributeKind::Relationship,
                     AttributeKindSpec::Virtual => database_core::AttributeKind::Virtual,
                     AttributeKindSpec::Json => database_core::AttributeKind::Json,
+                    AttributeKindSpec::Enum => database_core::AttributeKind::Enum,
                 },
                 required: a.required,
                 array: a.array,
@@ -1710,6 +1777,7 @@ impl database_core::traits::migration::MigrationCollection for CollectionSpec {
                 } else {
                     database_core::AttributePersistence::Persisted
                 },
+                elements: a.elements.clone(),
             })
             .collect()
     }

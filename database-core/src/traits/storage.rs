@@ -22,6 +22,8 @@ pub enum StorageValue {
     FloatArray(Vec<f64>),
     String(String),
     StringArray(Vec<String>),
+    Enum(String),
+    EnumArray(Vec<String>),
     Bytes(Vec<u8>),
     Timestamp(OffsetDateTime),
     TimestampArray(Vec<OffsetDateTime>),
