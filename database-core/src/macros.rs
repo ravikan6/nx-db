@@ -315,8 +315,8 @@ macro_rules! impl_model {
         }
         $(, virtuals: { $($virtual_field:ident),* })?
         $(, loaded: { $($loaded_field:ident),* })?
-        $(, loaded_one: { $($loaded_one_field:ident),* })?
-        $(, loaded_many: { $($loaded_many_field:ident),* })?
+        $(, loaded_one: { $($loaded_one_field:ident : $loaded_one_model:ident),* })?
+        $(, loaded_many: { $($loaded_many_field:ident : $loaded_many_model:ident),* })?
         $(, resolvers: { $($resolver_field:ident : $resolver_fn:path),* })?
     ) => {
         impl $crate::Model for $model_name {
@@ -343,6 +343,41 @@ macro_rules! impl_model {
                         entity.$resolver_field = Some($resolver_fn(&entity, context).await?);
                     )*)?
                     Ok(entity)
+                })
+            }
+
+            fn populate_entities<'a>(
+                entities: &'a mut [Self::Entity],
+                context: &'a $crate::Context,
+                db: &'a dyn $crate::model::PopulateContext,
+            ) -> $crate::model::ModelFuture<'a, Result<(), $crate::errors::DatabaseError>> {
+                Box::pin(async move {
+                    $($(
+                        let mut ids = Vec::new();
+                        for entity in entities.iter() {
+                            if let Some(id) = entity.$loaded_one_field.local_key() {
+                                if !ids.contains(id) {
+                                    ids.push(id.clone());
+                                }
+                            }
+                        }
+                        if !ids.is_empty() {
+                            let repo = db.repo_for_population::<$loaded_one_model>(context);
+                            let map = repo.find_many(ids.into_iter().map($crate::Key::new).collect::<Result<Vec<_>, _>>()?).await?;
+                            for entity in entities.iter_mut() {
+                                if let Some(id) = entity.$loaded_one_field.local_key() {
+                                    entity.$loaded_one_field = $crate::RelationOne::Loaded(map.get(id).cloned());
+                                }
+                            }
+                            // Recursive population if needed could be added here
+                        }
+                    )*)?
+
+                    $($(
+                        // Here we could use a convention or more metadata to find the foreign key field.
+                        // Assuming for this "ultra-fast" pass that we have a standard way to find children.
+                    )*)?
+                    Ok(())
                 })
             }
 

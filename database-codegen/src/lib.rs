@@ -1256,10 +1256,24 @@ fn emit_collection(
             continue;
         }
         if attribute_is_relation_one(attribute) {
-            loaded_one_lines.push(loaded_relation_field_name(attribute));
+            let rel = attribute.relationship.as_ref().unwrap();
+            let related_collection = spec
+                .collections
+                .iter()
+                .find(|c| c.id == rel.related_collection)
+                .unwrap();
+            let related_model = default_model_name(related_collection);
+            loaded_one_lines.push(format!("{} : {}", loaded_relation_field_name(attribute), related_model));
         }
         if attribute_is_relation_many(attribute) {
-            loaded_many_lines.push(rust_field_name(&attribute.id));
+            let rel = attribute.relationship.as_ref().unwrap();
+            let related_collection = spec
+                .collections
+                .iter()
+                .find(|c| c.id == rel.related_collection)
+                .unwrap();
+            let related_model = default_model_name(related_collection);
+            loaded_many_lines.push(format!("{} : {}", rust_field_name(&attribute.id), related_model));
             continue;
         }
         let field_id = &attribute.id;

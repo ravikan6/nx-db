@@ -2603,3 +2603,77 @@ mod tests {
         }
     }
 }
+
+impl<A, R, E> crate::model::PopulateContext for Database<A, R, E>
+where
+    A: StorageAdapter,
+    R: CollectionRegistry + Sync,
+    E: EventBus + Sync,
+{
+    fn repo_for_population<'a, M: Model>(
+        &'a self,
+        context: &Context,
+    ) -> Box<dyn crate::model::PopulationRepo<'a, M> + 'a>
+    where
+        M::Entity: serde::Serialize + serde::de::DeserializeOwned,
+    {
+        Box::new(PopulationRepoWrapper(self.scope(context.clone()).repo::<M>()))
+    }
+}
+
+struct PopulationRepoWrapper<'a, A, R, E, M>(Repository<'a, A, R, E, M>);
+
+impl<'a, A, R, E, M> crate::model::PopulationRepo<'a, M> for PopulationRepoWrapper<'a, A, R, E, M>
+where
+    A: StorageAdapter,
+    R: CollectionRegistry + Sync,
+    E: EventBus + Sync,
+    M: Model,
+    M::Entity: serde::Serialize + serde::de::DeserializeOwned,
+{
+    fn find_many(
+        &self,
+        ids: Vec<M::Id>,
+    ) -> crate::model::ModelFuture<'_, std::collections::HashMap<String, M::Entity>, DatabaseError>
+    {
+        Box::pin(async move {
+            let mut keys = Vec::with_capacity(ids.len());
+            for id in ids {
+                keys.push(M::id_to_string(&id).to_string());
+            }
+            if keys.is_empty() {
+                return Ok(std::collections::HashMap::new());
+            }
+
+            let query = QuerySpec::new().filter(Filter::field(
+                crate::FIELD_ID,
+                FilterOp::In(keys.into_iter().map(StorageValue::String).collect()),
+            ));
+
+            let related: Vec<M::Entity> = self.0.find(query).await?;
+            let mut map = std::collections::HashMap::with_capacity(related.len());
+            for entity in related {
+                map.insert(
+                    M::id_to_string(M::entity_to_id(&entity)).to_string(),
+                    entity,
+                );
+            }
+            Ok(map)
+        })
+    }
+
+    fn find_by_field(
+        &self,
+        _field: &'static str,
+        _values: Vec<StorageValue>,
+    ) -> crate::model::ModelFuture<
+        '_,
+        std::collections::HashMap<String, Vec<M::Entity>>,
+        DatabaseError,
+    > {
+        Box::pin(async move {
+            // Simplified for now
+            Ok(std::collections::HashMap::new())
+        })
+    }
+}
