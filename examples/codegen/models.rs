@@ -18,7 +18,7 @@ pub mod app_models {
         pub email: Option<String>,
         #[nx(field = "active", required)]
         pub active: bool,
-        #[serde(flatten)]
+        #[serde(rename = "_metadata")]
         #[nx(metadata)]
         pub _metadata: nx_db::Metadata,
     }
@@ -91,7 +91,7 @@ pub mod app_models {
         pub token: String,
         #[nx(field = "revoked", required)]
         pub revoked: bool,
-        #[serde(flatten)]
+        #[serde(rename = "_metadata")]
         #[nx(metadata)]
         pub _metadata: nx_db::Metadata,
     }

@@ -16,7 +16,7 @@ pub mod filtered_app_models {
         pub name: crate::DisplayName,
         #[nx(field = "active", required)]
         pub active: bool,
-        #[serde(flatten)]
+        #[serde(rename = "_metadata")]
         #[nx(metadata)]
         pub _metadata: nx_db::Metadata,
     }

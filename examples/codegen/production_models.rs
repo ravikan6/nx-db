@@ -21,7 +21,7 @@ pub mod prod_models {
         #[serde(default, skip_serializing_if = "nx_db::RelationMany::is_not_loaded")]
         #[nx(loaded_many)]
         pub posts: nx_db::RelationMany<PostEntity>,
-        #[serde(flatten)]
+        #[serde(rename = "_metadata")]
         #[nx(metadata)]
         pub _metadata: nx_db::Metadata,
     }
@@ -98,7 +98,7 @@ pub mod prod_models {
         #[serde(default, skip_serializing_if = "nx_db::RelationOne::is_not_loaded")]
         #[nx(loaded_one)]
         pub author_rel: nx_db::RelationOne<UserEntity>,
-        #[serde(flatten)]
+        #[serde(rename = "_metadata")]
         #[nx(metadata)]
         pub _metadata: nx_db::Metadata,
     }

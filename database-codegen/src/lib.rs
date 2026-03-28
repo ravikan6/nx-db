@@ -699,7 +699,7 @@ fn emit_collection(
             .unwrap();
         }
     }
-    writeln!(out, "        #[serde(flatten)]").unwrap();
+    writeln!(out, "        #[serde(rename = \"_metadata\")]").unwrap();
     writeln!(out, "        #[nx(metadata)]").unwrap();
     writeln!(out, "        pub _metadata: nx_db::Metadata,").unwrap();
     writeln!(out, "    }}").unwrap();

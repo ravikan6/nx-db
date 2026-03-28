@@ -19,7 +19,7 @@ pub mod virtual_app_models {
         #[serde(skip_serializing_if = "Option::is_none")]
         #[nx(virtual, resolve = "crate::resolvers::resolve_profile_label")]
         pub profile_label: Option<String>,
-        #[serde(flatten)]
+        #[serde(rename = "_metadata")]
         #[nx(metadata)]
         pub _metadata: nx_db::Metadata,
     }

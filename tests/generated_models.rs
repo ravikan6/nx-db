@@ -693,3 +693,25 @@ fn generated_relation_constants_work_with_relation_driven_repository_api() {
         .expect("posts relation should be loaded");
     assert_eq!(loaded_posts.len(), 1);
 }
+
+#[test]
+fn generated_entities_encode_for_cache_with_bincode() {
+    let entity = prod_models::UserEntity {
+        id: prod_models::UserId::new("user_cache_test").expect("id should be valid"),
+        name: "Ravi".into(),
+        email: "ravi@example.com".into(),
+        metadata: None,
+        posts: Default::default(),
+        _metadata: nx_db::Metadata {
+            sequence: 1,
+            created_at: nx_db::time::OffsetDateTime::now_utc(),
+            updated_at: nx_db::time::OffsetDateTime::now_utc(),
+            permissions: vec!["read(\"any\")".into()],
+        },
+    };
+
+    let bytes = bincode::serde::encode_to_vec(&entity, bincode::config::standard())
+        .expect("generated entity should encode for cache");
+
+    assert!(!bytes.is_empty());
+}
