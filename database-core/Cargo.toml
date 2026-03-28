@@ -8,7 +8,7 @@ description = "Core domain, schema, query, and repository primitives for nx-db."
 readme = "../README.md"
 
 [dependencies]
-time = { version = "0.3.47", features = ["serde"] }
+time = { version = "0.3.47", features = ["formatting", "parsing", "serde"] }
 serde = { version = "1.0.228", features = ["derive"] }
 bytes = "1.10.1"
 bincode = { version = "2.0.1", features = ["serde"] }

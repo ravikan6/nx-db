@@ -9,258 +9,162 @@ pub mod prod_models {
 
     pub type UserId = Key<48>;
 
-    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize, nx_db::NxEntity)]
+    #[serde(rename_all = "camelCase")]
     pub struct UserEntity {
+        #[nx(id)]
         pub id: UserId,
+        #[nx(field = "name", required)]
         pub name: String,
+        #[nx(field = "email", required)]
         pub email: String,
+        #[nx(field = "metadata")]
         pub metadata: Option<String>,
+        #[serde(default, skip_serializing_if = "nx_db::RelationMany::is_not_loaded")]
+        #[nx(loaded_many)]
         pub posts: nx_db::RelationMany<PostEntity>,
+        #[serde(flatten)]
+        #[nx(metadata)]
         pub _metadata: nx_db::Metadata,
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, ::serde::Serialize, ::serde::Deserialize, nx_db::NxCreate)]
+    #[serde(rename_all = "camelCase")]
     pub struct CreateUser {
+        #[nx(id)]
         pub id: Option<UserId>,
+        #[nx(field = "name", required)]
         pub name: String,
+        #[nx(field = "email", required)]
         pub email: String,
+        #[nx(field = "metadata")]
         pub metadata: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[nx(permissions)]
         pub permissions: Vec<String>,
     }
 
-    nx_db::impl_create_builder! { create: CreateUser, id: UserId, required: { name: String, email: String }, optional: { metadata: Option<String> } }
-
-    #[derive(Debug, Clone, Default)]
+    #[derive(Debug, Clone, Default, nx_db::NxUpdate)]
     pub struct UpdateUser {
+        #[nx(field = "name")]
         pub name: Patch<String>,
+        #[nx(field = "email")]
         pub email: Patch<String>,
+        #[nx(field = "metadata")]
         pub metadata: Patch<Option<String>>,
+        #[nx(permissions)]
         pub permissions: Patch<Vec<String>>,
     }
 
-    #[derive(Debug, Clone, Copy)]
-    pub struct User;
-    pub const USER: User = User;
-
-    pub const USER_ID: Field<User, UserId> = Field::new(FIELD_ID);
-    pub const USER_NAME: Field<User, String> = Field::new("name");
-    pub const USER_EMAIL: Field<User, String> = Field::new("email");
-    pub const USER_METADATA: Field<User, Option<String>> = Field::new("metadata");
-    pub const USER_POSTS_REL: nx_db::Rel<User, Post> = nx_db::Rel::<User, Post>::one_to_many("posts", "author");
-    fn populate_user_posts_local_key(entity: &UserEntity) -> String {
-        entity.id.to_string()
+    nx_db::declare_model! {
+        name: User,
+        const: USER,
+        entity: UserEntity,
+        create: CreateUser,
+        update: UpdateUser,
+        schema: USERS_SCHEMA,
+        plain: {
+            USER_ID => ID: UserId = FIELD_ID,
+            USER_NAME => NAME: String = "name",
+            USER_EMAIL => EMAIL: String = "email",
+            USER_METADATA => METADATA: Option<String> = "metadata",
+        },
+        encoded: {
+        }
     }
-    fn populate_user_posts_remote_key(entity: &PostEntity) -> Option<String> {
-        Some(entity.author.clone())
-    }
-    fn populate_user_posts_set(entity: &mut UserEntity, value: nx_db::RelationMany<PostEntity>) {
-        entity.posts = value;
-    }
-    pub const USER_POSTS_POPULATE: nx_db::core::PopulateMany<User, Post> = nx_db::core::PopulateMany::new(USER_POSTS_REL, populate_user_posts_local_key, populate_user_posts_remote_key, populate_user_posts_set);
+    nx_db::impl_relation_many! { rel_const: USER_POSTS_REL, populate_const: USER_POSTS_POPULATE, rel_expr: nx_db::Rel::<User, Post>::one_to_many("posts", "author"), local_fn: populate_user_posts_local_key, remote_fn: populate_user_posts_remote_key, set_fn: populate_user_posts_set, model: User, related_model: Post, entity: UserEntity, related_entity: PostEntity, field: posts, local_key: |local_entity| local_entity.id.to_string(), remote_key: |remote_entity| Some(remote_entity.author.clone()) }
 
     const USERS_ATTRIBUTES: &[AttributeSchema] = &[
-        AttributeSchema {
-            id: "name",
-            column: "name",
-            kind: AttributeKind::String,
-            required: true,
-            array: false,
-            length: None,
-            default: None,
-            persistence: AttributePersistence::Persisted,
-            filters: &[],
-            elements: None,
-            relationship: None,
-        },
-        AttributeSchema {
-            id: "email",
-            column: "email",
-            kind: AttributeKind::String,
-            required: true,
-            array: false,
-            length: None,
-            default: None,
-            persistence: AttributePersistence::Persisted,
-            filters: &[],
-            elements: None,
-            relationship: None,
-        },
-        AttributeSchema {
-            id: "metadata",
-            column: "metadata",
-            kind: AttributeKind::Json,
-            required: false,
-            array: false,
-            length: None,
-            default: None,
-            persistence: AttributePersistence::Persisted,
-            filters: &[],
-            elements: None,
-            relationship: None,
-        },
-        AttributeSchema {
-            id: "posts",
-            column: "",
-            kind: AttributeKind::Relationship,
-            required: false,
-            array: false,
-            length: None,
-            default: None,
-            persistence: AttributePersistence::Virtual,
-            filters: &[],
-            elements: None,
-            relationship: Some(nx_db::RelationshipSchema {
-                related_collection: "posts",
-                kind: nx_db::RelationshipKind::OneToMany,
-                side: nx_db::RelationshipSide::Parent,
-                two_way: true,
-                two_way_key: Some("author"),
-                through_collection: None,
-                through_local_field: None,
-                through_remote_field: None,
-                on_delete: nx_db::OnDeleteAction::Restrict,
-            }),
-        },
+        AttributeSchema::persisted("name", "name", AttributeKind::String).required(),
+        AttributeSchema::persisted("email", "email", AttributeKind::String).required(),
+        AttributeSchema::persisted("metadata", "metadata", AttributeKind::Json),
+        AttributeSchema::virtual_field("posts", AttributeKind::Relationship).relationship(nx_db::RelationshipSchema::new("posts", nx_db::RelationshipKind::OneToMany, nx_db::RelationshipSide::Parent).two_way(Some("author"))),
     ];
     const USERS_INDEXES: &[nx_db::IndexSchema] = &[
-        nx_db::IndexSchema {
-            id: "users_email_unique",
-            kind: nx_db::IndexKind::Unique,
-            attributes: &["email"],
-            orders: &[],
-        },
+        nx_db::IndexSchema::new("users_email_unique", nx_db::IndexKind::Unique, &["email"]),
     ];
-    pub static USERS_SCHEMA: CollectionSchema = CollectionSchema { id: "users", name: "Users", document_security: true, enabled: true, permissions: &["read(\"any\")", "create(\"any\")"], attributes: USERS_ATTRIBUTES, indexes: USERS_INDEXES };
-    impl User {
-        pub const ID: Field<User, UserId> = Field::new(FIELD_ID);
-        pub const NAME: Field<User, String> = Field::new("name");
-        pub const EMAIL: Field<User, String> = Field::new("email");
-        pub const METADATA: Field<User, Option<String>> = Field::new("metadata");
-    }
-    nx_db::impl_model! { name: User, id: UserId, entity: UserEntity, create: CreateUser, update: UpdateUser, schema: USERS_SCHEMA, fields: {                 "name" => name : String :required,                 "email" => email : String :required,                 "metadata" => metadata : Option<String> }, loaded_many: { posts } }
+    pub static USERS_SCHEMA: CollectionSchema = CollectionSchema::new("users", "Users").document_security(true).permissions(&["read(\"any\")", "create(\"any\")"]).attributes(USERS_ATTRIBUTES).indexes(USERS_INDEXES);
     pub type PostId = Key<48>;
 
-    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize, nx_db::NxEntity)]
+    #[serde(rename_all = "camelCase")]
     pub struct PostEntity {
+        #[nx(id)]
         pub id: PostId,
+        #[nx(field = "title", required)]
         pub title: String,
+        #[nx(field = "content")]
         pub content: Option<String>,
+        #[nx(field = "author", required)]
         pub author: String,
+        #[serde(default, skip_serializing_if = "nx_db::RelationOne::is_not_loaded")]
+        #[nx(loaded_one)]
         pub author_rel: nx_db::RelationOne<UserEntity>,
+        #[serde(flatten)]
+        #[nx(metadata)]
         pub _metadata: nx_db::Metadata,
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, ::serde::Serialize, ::serde::Deserialize, nx_db::NxCreate)]
+    #[serde(rename_all = "camelCase")]
     pub struct CreatePost {
+        #[nx(id)]
         pub id: Option<PostId>,
+        #[nx(field = "title", required)]
         pub title: String,
+        #[nx(field = "content")]
         pub content: Option<String>,
+        #[nx(field = "author", required)]
         pub author: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[nx(permissions)]
         pub permissions: Vec<String>,
     }
 
-    nx_db::impl_create_builder! { create: CreatePost, id: PostId, required: { title: String, author: String }, optional: { content: Option<String> } }
-
-    #[derive(Debug, Clone, Default)]
+    #[derive(Debug, Clone, Default, nx_db::NxUpdate)]
     pub struct UpdatePost {
+        #[nx(field = "title")]
         pub title: Patch<String>,
+        #[nx(field = "content")]
         pub content: Patch<Option<String>>,
+        #[nx(field = "author")]
         pub author: Patch<String>,
+        #[nx(permissions)]
         pub permissions: Patch<Vec<String>>,
     }
 
-    #[derive(Debug, Clone, Copy)]
-    pub struct Post;
-    pub const POST: Post = Post;
-
-    pub const POST_ID: Field<Post, PostId> = Field::new(FIELD_ID);
-    pub const POST_TITLE: Field<Post, String> = Field::new("title");
-    pub const POST_CONTENT: Field<Post, Option<String>> = Field::new("content");
-    pub const POST_AUTHOR: Field<Post, String> = Field::new("author");
-    pub const POST_AUTHOR_REL: nx_db::Rel<Post, User> = nx_db::Rel::<Post, User>::many_to_one("author", "author");
-    fn populate_post_author_local_key(entity: &PostEntity) -> Option<String> {
-        Some(entity.author.clone())
+    nx_db::declare_model! {
+        name: Post,
+        const: POST,
+        entity: PostEntity,
+        create: CreatePost,
+        update: UpdatePost,
+        schema: POSTS_SCHEMA,
+        plain: {
+            POST_ID => ID: PostId = FIELD_ID,
+            POST_TITLE => TITLE: String = "title",
+            POST_CONTENT => CONTENT: Option<String> = "content",
+            POST_AUTHOR => AUTHOR: String = "author",
+        },
+        encoded: {
+        }
     }
-    fn populate_post_author_remote_key(entity: &UserEntity) -> Option<String> {
-        Some(entity.id.to_string())
-    }
-    fn populate_post_author_set(entity: &mut PostEntity, value: nx_db::RelationOne<UserEntity>) {
-        entity.author_rel = value;
-    }
-    pub const POST_AUTHOR_POPULATE: nx_db::core::PopulateOne<Post, User> = nx_db::core::PopulateOne::new(POST_AUTHOR_REL, populate_post_author_local_key, populate_post_author_remote_key, populate_post_author_set);
+    nx_db::impl_relation_one! { rel_const: POST_AUTHOR_REL, populate_const: POST_AUTHOR_POPULATE, rel_expr: nx_db::Rel::<Post, User>::many_to_one("author", "author"), local_fn: populate_post_author_local_key, remote_fn: populate_post_author_remote_key, set_fn: populate_post_author_set, model: Post, related_model: User, entity: PostEntity, related_entity: UserEntity, field: author_rel, local_key: |local_entity| Some(local_entity.author.clone()), remote_key: |remote_entity| Some(remote_entity.id.to_string()) }
 
     const POSTS_ATTRIBUTES: &[AttributeSchema] = &[
-        AttributeSchema {
-            id: "title",
-            column: "title",
-            kind: AttributeKind::String,
-            required: true,
-            array: false,
-            length: None,
-            default: None,
-            persistence: AttributePersistence::Persisted,
-            filters: &[],
-            elements: None,
-            relationship: None,
-        },
-        AttributeSchema {
-            id: "content",
-            column: "content",
-            kind: AttributeKind::String,
-            required: false,
-            array: false,
-            length: None,
-            default: None,
-            persistence: AttributePersistence::Persisted,
-            filters: &[],
-            elements: None,
-            relationship: None,
-        },
-        AttributeSchema {
-            id: "author",
-            column: "author",
-            kind: AttributeKind::Relationship,
-            required: true,
-            array: false,
-            length: None,
-            default: None,
-            persistence: AttributePersistence::Persisted,
-            filters: &[],
-            elements: None,
-            relationship: Some(nx_db::RelationshipSchema {
-                related_collection: "users",
-                kind: nx_db::RelationshipKind::ManyToOne,
-                side: nx_db::RelationshipSide::Parent,
-                two_way: false,
-                two_way_key: None,
-                through_collection: None,
-                through_local_field: None,
-                through_remote_field: None,
-                on_delete: nx_db::OnDeleteAction::Restrict,
-            }),
-        },
+        AttributeSchema::persisted("title", "title", AttributeKind::String).required(),
+        AttributeSchema::persisted("content", "content", AttributeKind::String),
+        AttributeSchema::persisted("author", "author", AttributeKind::Relationship).required().relationship(nx_db::RelationshipSchema::new("users", nx_db::RelationshipKind::ManyToOne, nx_db::RelationshipSide::Parent)),
     ];
     const POSTS_INDEXES: &[nx_db::IndexSchema] = &[
-        nx_db::IndexSchema {
-            id: "full_text_content",
-            kind: nx_db::IndexKind::FullText,
-            attributes: &["content"],
-            orders: &[],
-        },
+        nx_db::IndexSchema::new("full_text_content", nx_db::IndexKind::FullText, &["content"]),
     ];
-    pub static POSTS_SCHEMA: CollectionSchema = CollectionSchema { id: "posts", name: "Posts", document_security: true, enabled: true, permissions: &["read(\"any\")", "create(\"any\")"], attributes: POSTS_ATTRIBUTES, indexes: POSTS_INDEXES };
-    impl Post {
-        pub const ID: Field<Post, PostId> = Field::new(FIELD_ID);
-        pub const TITLE: Field<Post, String> = Field::new("title");
-        pub const CONTENT: Field<Post, Option<String>> = Field::new("content");
-        pub const AUTHOR: Field<Post, String> = Field::new("author");
-    }
-    nx_db::impl_model! { name: Post, id: PostId, entity: PostEntity, create: CreatePost, update: UpdatePost, schema: POSTS_SCHEMA, fields: {                 "title" => title : String :required,                 "content" => content : Option<String>,                 "author" => author : String :required }, loaded_one: { author_rel } }
-    pub fn registry() -> Result<StaticRegistry, DatabaseError> {
-        let registry = StaticRegistry::new()
-            .register(&USERS_SCHEMA)?
-            .register(&POSTS_SCHEMA)?
-            ;
-        Ok(registry)
+    pub static POSTS_SCHEMA: CollectionSchema = CollectionSchema::new("posts", "Posts").document_security(true).permissions(&["read(\"any\")", "create(\"any\")"]).attributes(POSTS_ATTRIBUTES).indexes(POSTS_INDEXES);
+    nx_db::impl_registry_fn! {
+        fn: registry,
+        schemas: [
+            USERS_SCHEMA,
+            POSTS_SCHEMA,
+        ]
     }
 }

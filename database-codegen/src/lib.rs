@@ -573,18 +573,14 @@ pub fn generate(spec: &ProjectSpec) -> Result<String, CodegenError> {
         emit_collection(&mut out, spec, collection)?;
     }
 
-    writeln!(
-        &mut out,
-        "    pub fn registry() -> Result<StaticRegistry, DatabaseError> {{"
-    )
-    .unwrap();
-    writeln!(&mut out, "        let registry = StaticRegistry::new()").unwrap();
+    writeln!(&mut out, "    nx_db::impl_registry_fn! {{").unwrap();
+    writeln!(&mut out, "        fn: registry,").unwrap();
+    writeln!(&mut out, "        schemas: [").unwrap();
     for collection in &spec.collections {
         let const_name = format!("{}_SCHEMA", screaming_snake(&collection.id));
-        writeln!(&mut out, "            .register(&{const_name})?").unwrap();
+        writeln!(&mut out, "            {const_name},").unwrap();
     }
-    writeln!(&mut out, "            ;").unwrap();
-    writeln!(&mut out, "        Ok(registry)").unwrap();
+    writeln!(&mut out, "        ]").unwrap();
     writeln!(&mut out, "    }}").unwrap();
     writeln!(&mut out, "}}").unwrap();
 
@@ -625,12 +621,74 @@ fn emit_collection(
 
     writeln!(
         out,
-        "    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]"
+        "    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize, nx_db::NxEntity)]"
     )
     .unwrap();
+    writeln!(out, "    #[serde(rename_all = \"camelCase\")]").unwrap();
     writeln!(out, "    pub struct {entity_name} {{").unwrap();
+    writeln!(out, "        #[nx(id)]").unwrap();
     writeln!(out, "        pub id: {id_name},").unwrap();
     for attribute in &collection.attributes {
+        if attribute.kind == AttributeKindSpec::Virtual {
+            let resolver = resolve_attribute_resolver(&resolvers_by_name, collection, attribute)?;
+            writeln!(
+                out,
+                "        #[serde(skip_serializing_if = \"Option::is_none\")]"
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "        #[nx(virtual, resolve = \"{}\")]",
+                resolver.resolve
+            )
+            .unwrap();
+            writeln!(
+                out,
+                "        pub {}: {},",
+                rust_field_name(&attribute.id),
+                entity_field_type(spec, collection, attribute)?
+            )
+            .unwrap();
+            continue;
+        }
+        if attribute_is_relation_many(attribute) {
+            writeln!(
+                out,
+                "        #[serde(default, skip_serializing_if = \"nx_db::RelationMany::is_not_loaded\")]"
+            )
+            .unwrap();
+            writeln!(out, "        #[nx(loaded_many)]").unwrap();
+            writeln!(
+                out,
+                "        pub {}: {},",
+                rust_field_name(&attribute.id),
+                entity_field_type(spec, collection, attribute)?
+            )
+            .unwrap();
+            continue;
+        }
+
+        let field_attr = if attribute.filters.is_empty() {
+            if attribute.required {
+                format!("#[nx(field = \"{}\", required)]", attribute.id)
+            } else {
+                format!("#[nx(field = \"{}\")]", attribute.id)
+            }
+        } else {
+            let decode = decode_helper_name(&model_name, &attribute.id);
+            if attribute.required {
+                format!(
+                    "#[nx(field = \"{}\", required, decode = \"{}\")]",
+                    attribute.id, decode
+                )
+            } else {
+                format!(
+                    "#[nx(field = \"{}\", decode = \"{}\")]",
+                    attribute.id, decode
+                )
+            }
+        };
+        writeln!(out, "        {field_attr}").unwrap();
         let field_type = entity_field_type(spec, collection, attribute)?;
         writeln!(
             out,
@@ -642,6 +700,12 @@ fn emit_collection(
         if attribute_is_relation_one(attribute) {
             writeln!(
                 out,
+                "        #[serde(default, skip_serializing_if = \"nx_db::RelationOne::is_not_loaded\")]"
+            )
+            .unwrap();
+            writeln!(out, "        #[nx(loaded_one)]").unwrap();
+            writeln!(
+                out,
                 "        pub {}: nx_db::RelationOne<{}>,",
                 loaded_relation_field_name(attribute),
                 related_entity_type(spec, collection, attribute)?
@@ -649,16 +713,48 @@ fn emit_collection(
             .unwrap();
         }
     }
+    writeln!(out, "        #[serde(flatten)]").unwrap();
+    writeln!(out, "        #[nx(metadata)]").unwrap();
     writeln!(out, "        pub _metadata: nx_db::Metadata,").unwrap();
     writeln!(out, "    }}").unwrap();
     writeln!(out).unwrap();
 
-    writeln!(out, "    #[derive(Debug, Clone)]").unwrap();
+    writeln!(
+        out,
+        "    #[derive(Debug, Clone, ::serde::Serialize, ::serde::Deserialize, nx_db::NxCreate)]"
+    )
+    .unwrap();
+    writeln!(out, "    #[serde(rename_all = \"camelCase\")]").unwrap();
     writeln!(out, "    pub struct {create_name} {{").unwrap();
+    writeln!(out, "        #[nx(id)]").unwrap();
     writeln!(out, "        pub id: Option<{id_name}>,").unwrap();
     for attribute in &collection.attributes {
         if attribute.kind == AttributeKindSpec::Virtual || attribute_is_relation_many(attribute) {
             continue;
+        }
+        if attribute.filters.is_empty() {
+            if attribute.required {
+                writeln!(out, "        #[nx(field = \"{}\", required)]", attribute.id).unwrap();
+            } else {
+                writeln!(out, "        #[nx(field = \"{}\")]", attribute.id).unwrap();
+            }
+        } else {
+            let encode = encode_helper_name(&model_name, &attribute.id);
+            if attribute.required {
+                writeln!(
+                    out,
+                    "        #[nx(field = \"{}\", required, encode = \"{}\")]",
+                    attribute.id, encode
+                )
+                .unwrap();
+            } else {
+                writeln!(
+                    out,
+                    "        #[nx(field = \"{}\", encode = \"{}\")]",
+                    attribute.id, encode
+                )
+                .unwrap();
+            }
         }
         let field_type = entity_field_type(spec, collection, attribute)?;
         writeln!(
@@ -669,53 +765,32 @@ fn emit_collection(
         )
         .unwrap();
     }
+    writeln!(
+        out,
+        "        #[serde(default, skip_serializing_if = \"Vec::is_empty\")]"
+    )
+    .unwrap();
+    writeln!(out, "        #[nx(permissions)]").unwrap();
     writeln!(out, "        pub permissions: Vec<String>,").unwrap();
     writeln!(out, "    }}").unwrap();
     writeln!(out).unwrap();
 
-    let required_create_args = collection
-        .attributes
-        .iter()
-        .filter(|attribute| {
-            attribute.kind != AttributeKindSpec::Virtual
-                && !attribute_is_relation_many(attribute)
-                && attribute.required
-        })
-        .map(|attribute| {
-            let field_name = rust_field_name(&attribute.id);
-            let field_type = entity_field_type(spec, collection, attribute)?;
-            Ok(format!("{field_name}: {field_type}"))
-        })
-        .collect::<Result<Vec<_>, CodegenError>>()?;
-    let optional_create_args = collection
-        .attributes
-        .iter()
-        .filter(|attribute| {
-            attribute.kind != AttributeKindSpec::Virtual
-                && !attribute_is_relation_many(attribute)
-                && !attribute.required
-        })
-        .map(|attribute| {
-            let field_name = rust_field_name(&attribute.id);
-            let field_type = entity_field_type(spec, collection, attribute)?;
-            Ok(format!("{field_name}: {field_type}"))
-        })
-        .collect::<Result<Vec<_>, CodegenError>>()?;
-
-    writeln!(
-        out,
-        "    nx_db::impl_create_builder! {{ create: {create_name}, id: {id_name}, required: {{ {} }}, optional: {{ {} }} }}",
-        required_create_args.join(", "),
-        optional_create_args.join(", ")
-    )
-    .unwrap();
-    writeln!(out).unwrap();
-
-    writeln!(out, "    #[derive(Debug, Clone, Default)]").unwrap();
+    writeln!(out, "    #[derive(Debug, Clone, Default, nx_db::NxUpdate)]").unwrap();
     writeln!(out, "    pub struct {update_name} {{").unwrap();
     for attribute in &collection.attributes {
         if attribute.kind == AttributeKindSpec::Virtual || attribute_is_relation_many(attribute) {
             continue;
+        }
+        if attribute.filters.is_empty() {
+            writeln!(out, "        #[nx(field = \"{}\")]", attribute.id).unwrap();
+        } else {
+            writeln!(
+                out,
+                "        #[nx(field = \"{}\", encode = \"{}\")]",
+                attribute.id,
+                encode_helper_name(&model_name, &attribute.id)
+            )
+            .unwrap();
         }
         let field_type = entity_field_type(spec, collection, attribute)?;
         writeln!(
@@ -726,58 +801,66 @@ fn emit_collection(
         )
         .unwrap();
     }
+    writeln!(out, "        #[nx(permissions)]").unwrap();
     writeln!(out, "        pub permissions: Patch<Vec<String>>,").unwrap();
     writeln!(out, "    }}").unwrap();
     writeln!(out).unwrap();
 
-    writeln!(out, "    #[derive(Debug, Clone, Copy)]").unwrap();
-    writeln!(out, "    pub struct {model_name};").unwrap();
-    writeln!(
-        out,
-        "    pub const {model_const}: {model_name} = {model_name};"
-    )
-    .unwrap();
-    writeln!(out).unwrap();
-
-    writeln!(
-        out,
-        "    pub const {model_const}_ID: Field<{model_name}, {id_name}> = Field::new(FIELD_ID);"
-    )
-    .unwrap();
     let filters_by_name: BTreeMap<&str, &FilterSpec> = spec
         .filters
         .iter()
         .map(|filter| (filter.name.as_str(), filter))
         .collect();
+    writeln!(out, "    nx_db::declare_model! {{").unwrap();
+    writeln!(out, "        name: {model_name},").unwrap();
+    writeln!(out, "        const: {model_const},").unwrap();
+    writeln!(out, "        entity: {entity_name},").unwrap();
+    writeln!(out, "        create: {create_name},").unwrap();
+    writeln!(out, "        update: {update_name},").unwrap();
+    writeln!(out, "        schema: {schema_const},").unwrap();
+    writeln!(out, "        plain: {{").unwrap();
+    writeln!(
+        out,
+        "            {model_const}_ID => ID: {id_name} = FIELD_ID,"
+    )
+    .unwrap();
     for attribute in &collection.attributes {
-        if attribute_is_relation_many(attribute) {
+        if attribute_is_relation_many(attribute)
+            || attribute.kind == AttributeKindSpec::Virtual
+            || !attribute.filters.is_empty()
+        {
             continue;
         }
-        let const_name = format!("{model_const}_{}", screaming_snake(&attribute.id));
-        if attribute.filters.is_empty() {
-            let query_type = query_field_type(collection, attribute);
-            if attribute.kind == AttributeKindSpec::Virtual {
-                continue;
-            }
-            writeln!(
-                out,
-                "    pub const {const_name}: Field<{model_name}, {}> = Field::new(\"{}\");",
-                query_type, attribute.id
-            )
-            .unwrap();
-        } else {
-            let public_type = filtered_query_field_type(&filters_by_name, collection, attribute)?;
-            writeln!(
-                out,
-                "    pub const {const_name}: EncodedField<{model_name}, {}> = EncodedField::new(\"{}\", encode_query_{}_{});",
-                public_type,
-                attribute.id,
-                rust_field_name(&model_name),
-                rust_field_name(&attribute.id)
-            )
-            .unwrap();
-        }
+        let top_const_name = format!("{model_const}_{}", screaming_snake(&attribute.id));
+        let assoc_const_name = screaming_snake(&attribute.id);
+        let query_type = query_field_type(collection, attribute);
+        writeln!(
+            out,
+            "            {top_const_name} => {assoc_const_name}: {query_type} = \"{}\",",
+            attribute.id
+        )
+        .unwrap();
     }
+    writeln!(out, "        }},").unwrap();
+    writeln!(out, "        encoded: {{").unwrap();
+    for attribute in &collection.attributes {
+        if attribute_is_relation_many(attribute) || attribute.filters.is_empty() {
+            continue;
+        }
+        let top_const_name = format!("{model_const}_{}", screaming_snake(&attribute.id));
+        let assoc_const_name = screaming_snake(&attribute.id);
+        let public_type = filtered_query_field_type(&filters_by_name, collection, attribute)?;
+        writeln!(
+            out,
+            "            {top_const_name} => {assoc_const_name}: {public_type} = \"{}\" => encode_query_{}_{},",
+            attribute.id,
+            rust_field_name(&model_name),
+            rust_field_name(&attribute.id)
+        )
+        .unwrap();
+    }
+    writeln!(out, "        }}").unwrap();
+    writeln!(out, "    }}").unwrap();
     for attribute in &collection.attributes {
         let Some(rel) = &attribute.relationship else {
             continue;
@@ -846,12 +929,6 @@ fn emit_collection(
         };
 
         if let Some(rel_expr) = rel_expr {
-            writeln!(
-                out,
-                "    pub const {rel_const_name}: nx_db::Rel<{model_name}, {related_model_name}> = {rel_expr};"
-            )
-            .unwrap();
-
             let populate_const_name =
                 format!("{model_const}_{}_POPULATE", screaming_snake(&attribute.id));
             let local_fn = format!(
@@ -875,9 +952,9 @@ fn emit_collection(
                     let local_key_expr = if rel.kind == RelationshipKindSpec::OneToOne
                         && rel.side == RelationshipSideSpec::Child
                     {
-                        "Some(entity.id.to_string())".to_string()
+                        "Some(local_entity.id.to_string())".to_string()
                     } else {
-                        entity_optional_string_key_expr(collection, &attribute.id, "entity")?
+                        entity_optional_string_key_expr(collection, &attribute.id, "local_entity")?
                     };
                     let remote_field = if rel.kind == RelationshipKindSpec::OneToOne {
                         rel.two_way_key.as_deref().unwrap_or("id")
@@ -887,35 +964,18 @@ fn emit_collection(
                     let remote_key_expr = entity_optional_string_key_expr(
                         related_collection,
                         remote_field,
-                        "entity",
+                        "remote_entity",
                     )?;
                     let loaded_field = loaded_relation_field_name(attribute);
 
                     writeln!(
                         out,
-                        "    fn {local_fn}(entity: &{entity_name}) -> Option<String> {{"
-                    )
-                    .unwrap();
-                    writeln!(out, "        {local_key_expr}").unwrap();
-                    writeln!(out, "    }}").unwrap();
-                    writeln!(out, "    fn {remote_fn}(entity: &{related_model_name}Entity) -> Option<String> {{").unwrap();
-                    writeln!(out, "        {remote_key_expr}").unwrap();
-                    writeln!(out, "    }}").unwrap();
-                    writeln!(
-                        out,
-                        "    fn {set_fn}(entity: &mut {entity_name}, value: nx_db::RelationOne<{related_model_name}Entity>) {{"
-                    )
-                    .unwrap();
-                    writeln!(out, "        entity.{loaded_field} = value;").unwrap();
-                    writeln!(out, "    }}").unwrap();
-                    writeln!(
-                        out,
-                        "    pub const {populate_const_name}: nx_db::core::PopulateOne<{model_name}, {related_model_name}> = nx_db::core::PopulateOne::new({rel_const_name}, {local_fn}, {remote_fn}, {set_fn});"
+                        "    nx_db::impl_relation_one! {{ rel_const: {rel_const_name}, populate_const: {populate_const_name}, rel_expr: {rel_expr}, local_fn: {local_fn}, remote_fn: {remote_fn}, set_fn: {set_fn}, model: {model_name}, related_model: {related_model_name}, entity: {entity_name}, related_entity: {related_model_name}Entity, field: {loaded_field}, local_key: |local_entity| {local_key_expr}, remote_key: |remote_entity| {remote_key_expr} }}"
                     )
                     .unwrap();
                 }
                 RelationshipKindSpec::OneToMany | RelationshipKindSpec::ManyToMany => {
-                    let local_key_expr = "entity.id.to_string()".to_string();
+                    let local_key_expr = "local_entity.id.to_string()".to_string();
                     let remote_field = if rel.kind == RelationshipKindSpec::OneToMany {
                         rel.two_way_key.as_deref().unwrap_or("id")
                     } else {
@@ -924,30 +984,13 @@ fn emit_collection(
                     let remote_key_expr = entity_optional_string_key_expr(
                         related_collection,
                         remote_field,
-                        "entity",
+                        "remote_entity",
                     )?;
                     let field_name = rust_field_name(&attribute.id);
 
                     writeln!(
                         out,
-                        "    fn {local_fn}(entity: &{entity_name}) -> String {{"
-                    )
-                    .unwrap();
-                    writeln!(out, "        {local_key_expr}").unwrap();
-                    writeln!(out, "    }}").unwrap();
-                    writeln!(out, "    fn {remote_fn}(entity: &{related_model_name}Entity) -> Option<String> {{").unwrap();
-                    writeln!(out, "        {remote_key_expr}").unwrap();
-                    writeln!(out, "    }}").unwrap();
-                    writeln!(
-                        out,
-                        "    fn {set_fn}(entity: &mut {entity_name}, value: nx_db::RelationMany<{related_model_name}Entity>) {{"
-                    )
-                    .unwrap();
-                    writeln!(out, "        entity.{field_name} = value;").unwrap();
-                    writeln!(out, "    }}").unwrap();
-                    writeln!(
-                        out,
-                        "    pub const {populate_const_name}: nx_db::core::PopulateMany<{model_name}, {related_model_name}> = nx_db::core::PopulateMany::new({rel_const_name}, {local_fn}, {remote_fn}, {set_fn});"
+                        "    nx_db::impl_relation_many! {{ rel_const: {rel_const_name}, populate_const: {populate_const_name}, rel_expr: {rel_expr}, local_fn: {local_fn}, remote_fn: {remote_fn}, set_fn: {set_fn}, model: {model_name}, related_model: {related_model_name}, entity: {entity_name}, related_entity: {related_model_name}Entity, field: {field_name}, local_key: |local_entity| {local_key_expr}, remote_key: |remote_entity| {remote_key_expr} }}"
                     )
                     .unwrap();
                 }
@@ -1048,275 +1091,23 @@ fn emit_collection(
 
     writeln!(out, "    const {attrs_const}: &[AttributeSchema] = &[").unwrap();
     for attribute in &collection.attributes {
-        writeln!(out, "        AttributeSchema {{").unwrap();
-        writeln!(out, "            id: \"{}\",", attribute.id).unwrap();
-        writeln!(
-            out,
-            "            column: \"{}\",",
-            attribute_column(attribute)
-        )
-        .unwrap();
-        writeln!(
-            out,
-            "            kind: {},",
-            attribute_kind_expr(attribute.kind)
-        )
-        .unwrap();
-        writeln!(out, "            required: {},", attribute.required).unwrap();
-        writeln!(out, "            array: {},", attribute.array).unwrap();
-        writeln!(
-            out,
-            "            length: {},",
-            attribute
-                .length
-                .map(|l| format!("Some({})", l))
-                .unwrap_or_else(|| "None".to_string())
-        )
-        .unwrap();
-        writeln!(out, "            default: None,").unwrap();
-        writeln!(
-            out,
-            "            persistence: AttributePersistence::{},",
-            if !attribute_is_persisted(attribute) {
-                "Virtual"
-            } else {
-                "Persisted"
-            }
-        )
-        .unwrap();
-        writeln!(
-            out,
-            "            filters: &[{}],",
-            attribute
-                .filters
-                .iter()
-                .map(|value| format!("\"{}\"", escape_string(value)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-        .unwrap();
-        writeln!(
-            out,
-            "            elements: {},",
-            attribute
-                .elements
-                .as_ref()
-                .map(|e| format!(
-                    "Some(&[{}])",
-                    e.iter()
-                        .map(|s| format!("\"{}\"", escape_string(s)))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ))
-                .unwrap_or_else(|| "None".to_string())
-        )
-        .unwrap();
-        if let Some(rel) = &attribute.relationship {
-            writeln!(
-                out,
-                "            relationship: Some(nx_db::RelationshipSchema {{"
-            )
-            .unwrap();
-            writeln!(
-                out,
-                "                related_collection: \"{}\",",
-                rel.related_collection
-            )
-            .unwrap();
-            writeln!(
-                out,
-                "                kind: {},",
-                relationship_kind_expr(rel.kind)
-            )
-            .unwrap();
-            writeln!(
-                out,
-                "                side: {},",
-                relationship_side_expr(rel.side)
-            )
-            .unwrap();
-            writeln!(out, "                two_way: {},", rel.two_way).unwrap();
-            writeln!(
-                out,
-                "                two_way_key: {},",
-                rel.two_way_key
-                    .as_ref()
-                    .map(|k| format!("Some(\"{}\")", escape_string(k)))
-                    .unwrap_or_else(|| "None".to_string())
-            )
-            .unwrap();
-            writeln!(
-                out,
-                "                through_collection: {},",
-                rel.through_collection
-                    .as_ref()
-                    .map(|k| format!("Some(\"{}\")", escape_string(k)))
-                    .unwrap_or_else(|| "None".to_string())
-            )
-            .unwrap();
-            writeln!(
-                out,
-                "                through_local_field: {},",
-                rel.through_local_field
-                    .as_ref()
-                    .map(|k| format!("Some(\"{}\")", escape_string(k)))
-                    .unwrap_or_else(|| "None".to_string())
-            )
-            .unwrap();
-            writeln!(
-                out,
-                "                through_remote_field: {},",
-                rel.through_remote_field
-                    .as_ref()
-                    .map(|k| format!("Some(\"{}\")", escape_string(k)))
-                    .unwrap_or_else(|| "None".to_string())
-            )
-            .unwrap();
-            writeln!(
-                out,
-                "                on_delete: {},",
-                on_delete_action_expr(rel.on_delete)
-            )
-            .unwrap();
-            writeln!(out, "            }}),").unwrap();
-        } else {
-            writeln!(out, "            relationship: None,").unwrap();
-        }
-        writeln!(out, "        }},").unwrap();
+        writeln!(out, "        {},", attribute_schema_expr(attribute)).unwrap();
     }
     writeln!(out, "    ];").unwrap();
     writeln!(out, "    const {indexes_const}: &[nx_db::IndexSchema] = &[").unwrap();
     for index in &collection.indexes {
-        writeln!(out, "        nx_db::IndexSchema {{").unwrap();
-        writeln!(out, "            id: \"{}\",", escape_string(&index.id)).unwrap();
-        writeln!(out, "            kind: {},", index_kind_expr(index.kind)).unwrap();
-        writeln!(
-            out,
-            "            attributes: &[{}],",
-            index
-                .attributes
-                .iter()
-                .map(|value| format!("\"{}\"", escape_string(value)))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-        .unwrap();
-        writeln!(
-            out,
-            "            orders: &[{}],",
-            index
-                .orders
-                .iter()
-                .map(|order| order_expr(*order))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-        .unwrap();
-        writeln!(out, "        }},").unwrap();
+        writeln!(out, "        {},", index_schema_expr(index)).unwrap();
     }
     writeln!(out, "    ];").unwrap();
-    writeln!(out, "    pub static {schema_const}: CollectionSchema = CollectionSchema {{ id: \"{}\", name: \"{}\", document_security: {}, enabled: true, permissions: &[{}], attributes: {attrs_const}, indexes: {indexes_const} }};",
-        collection.id, escape_string(&collection.name), collection.document_security,
-        collection.permissions.iter().map(|p| format!("\"{}\"", escape_string(p))).collect::<Vec<_>>().join(", ")
-    ).unwrap();
-
-    writeln!(out, "    impl {model_name} {{").unwrap();
     writeln!(
         out,
-        "        pub const ID: Field<{model_name}, {id_name}> = Field::new(FIELD_ID);"
+        "    pub static {schema_const}: CollectionSchema = CollectionSchema::new(\"{}\", \"{}\").document_security({}).permissions({}).attributes({attrs_const}).indexes({indexes_const});",
+        collection.id,
+        escape_string(&collection.name),
+        collection.document_security,
+        string_slice_expr(&collection.permissions),
     )
     .unwrap();
-    for attribute in &collection.attributes {
-        if attribute.kind == AttributeKindSpec::Virtual || attribute_is_relation_many(attribute) {
-            continue;
-        }
-        let const_name = screaming_snake(&attribute.id);
-        if attribute.filters.is_empty() {
-            writeln!(
-                out,
-                "        pub const {const_name}: Field<{model_name}, {}> = Field::new(\"{}\");",
-                query_field_type(collection, attribute),
-                attribute.id
-            )
-            .unwrap();
-        } else {
-            let public_type = filtered_query_field_type(&filters_by_name, collection, attribute)?;
-            writeln!(out, "        pub const {const_name}: EncodedField<{model_name}, {}> = EncodedField::new(\"{}\", encode_query_{}_{});",
-                public_type, attribute.id, rust_field_name(&model_name), rust_field_name(&attribute.id)).unwrap();
-        }
-    }
-    writeln!(out, "    }}").unwrap();
-
-    let mut attribute_lines = Vec::new();
-    let mut virtual_lines = Vec::new();
-    let mut loaded_one_lines = Vec::new();
-    let mut loaded_many_lines = Vec::new();
-    let mut resolver_lines = Vec::new();
-    for attribute in &collection.attributes {
-        if attribute.kind == AttributeKindSpec::Virtual {
-            let field = rust_field_name(&attribute.id);
-            virtual_lines.push(field.clone());
-            let resolver = resolve_attribute_resolver(&resolvers_by_name, collection, attribute)?;
-            resolver_lines.push(format!("{} : {}", field, resolver.resolve));
-            continue;
-        }
-        if attribute_is_relation_one(attribute) {
-            loaded_one_lines.push(loaded_relation_field_name(attribute));
-        }
-        if attribute_is_relation_many(attribute) {
-            loaded_many_lines.push(rust_field_name(&attribute.id));
-            continue;
-        }
-        let field_id = &attribute.id;
-        let field_name = rust_field_name(&attribute.id);
-        let storage_type = query_field_type(collection, attribute);
-        let required_flag = if attribute.required { " :required" } else { "" };
-        if let Some(decoder) = attribute
-            .filters
-            .first()
-            .map(|_| decode_helper_name(&model_name, &attribute.id))
-        {
-            let encoder = encode_helper_name(&model_name, &attribute.id);
-            attribute_lines.push(format!(
-                "                \"{}\" => {} : {} [{}, {}]{}",
-                field_id, field_name, storage_type, encoder, decoder, required_flag
-            ));
-        } else {
-            attribute_lines.push(format!(
-                "                \"{}\" => {} : {}{}",
-                field_id, field_name, storage_type, required_flag
-            ));
-        }
-    }
-
-    write!(
-        out,
-        "    nx_db::impl_model! {{ name: {}, id: {}, entity: {}, create: {}, update: {}, schema: {}, fields: {{ {} }}",
-        model_name,
-        id_name,
-        entity_name,
-        create_name,
-        update_name,
-        schema_const,
-        attribute_lines.join(", ")
-    )
-    .unwrap();
-    if !virtual_lines.is_empty() {
-        write!(
-            out,
-            ", virtuals: {{ {} }}, resolvers: {{ {} }}",
-            virtual_lines.join(", "),
-            resolver_lines.join(", ")
-        )
-        .unwrap();
-    }
-    if !loaded_one_lines.is_empty() {
-        write!(out, ", loaded_one: {{ {} }}", loaded_one_lines.join(", ")).unwrap();
-    }
-    if !loaded_many_lines.is_empty() {
-        write!(out, ", loaded_many: {{ {} }}", loaded_many_lines.join(", ")).unwrap();
-    }
-    writeln!(out, " }}").unwrap();
 
     Ok(())
 }
@@ -1386,6 +1177,133 @@ fn on_delete_action_expr(action: OnDeleteActionSpec) -> &'static str {
         OnDeleteActionSpec::Cascade => "nx_db::OnDeleteAction::Cascade",
         OnDeleteActionSpec::Restrict => "nx_db::OnDeleteAction::Restrict",
     }
+}
+
+fn string_slice_expr(values: &[String]) -> String {
+    format!(
+        "&[{}]",
+        values
+            .iter()
+            .map(|value| format!("\"{}\"", escape_string(value)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
+}
+
+fn optional_string_expr(value: Option<&String>) -> String {
+    value
+        .map(|value| format!("Some(\"{}\")", escape_string(value)))
+        .unwrap_or_else(|| "None".to_string())
+}
+
+fn relationship_schema_expr(relationship: &RelationshipSpec) -> String {
+    let mut expr = format!(
+        "nx_db::RelationshipSchema::new(\"{}\", {}, {})",
+        escape_string(&relationship.related_collection),
+        relationship_kind_expr(relationship.kind),
+        relationship_side_expr(relationship.side),
+    );
+
+    if relationship.two_way {
+        expr.push_str(&format!(
+            ".two_way({})",
+            optional_string_expr(relationship.two_way_key.as_ref())
+        ));
+    }
+
+    if let (Some(through_collection), Some(through_local_field), Some(through_remote_field)) = (
+        relationship.through_collection.as_ref(),
+        relationship.through_local_field.as_ref(),
+        relationship.through_remote_field.as_ref(),
+    ) {
+        expr.push_str(&format!(
+            ".through(\"{}\", \"{}\", \"{}\")",
+            escape_string(through_collection),
+            escape_string(through_local_field),
+            escape_string(through_remote_field),
+        ));
+    }
+
+    if relationship.on_delete != OnDeleteActionSpec::Restrict {
+        expr.push_str(&format!(
+            ".on_delete({})",
+            on_delete_action_expr(relationship.on_delete)
+        ));
+    }
+
+    expr
+}
+
+fn attribute_schema_expr(attribute: &AttributeSpec) -> String {
+    let mut expr = if attribute_is_persisted(attribute) {
+        format!(
+            "AttributeSchema::persisted(\"{}\", \"{}\", {})",
+            escape_string(&attribute.id),
+            escape_string(&attribute_column(attribute)),
+            attribute_kind_expr(attribute.kind),
+        )
+    } else {
+        format!(
+            "AttributeSchema::virtual_field(\"{}\", {})",
+            escape_string(&attribute.id),
+            attribute_kind_expr(attribute.kind),
+        )
+    };
+
+    if attribute.required {
+        expr.push_str(".required()");
+    }
+
+    if attribute.array {
+        expr.push_str(".array()");
+    }
+
+    if let Some(length) = attribute.length {
+        expr.push_str(&format!(".length({length})"));
+    }
+
+    if !attribute.filters.is_empty() {
+        expr.push_str(&format!(
+            ".filters({})",
+            string_slice_expr(&attribute.filters)
+        ));
+    }
+
+    if let Some(elements) = attribute.elements.as_ref() {
+        expr.push_str(&format!(".enum_elements({})", string_slice_expr(elements)));
+    }
+
+    if let Some(relationship) = attribute.relationship.as_ref() {
+        expr.push_str(&format!(
+            ".relationship({})",
+            relationship_schema_expr(relationship)
+        ));
+    }
+
+    expr
+}
+
+fn index_schema_expr(index: &IndexSpec) -> String {
+    let mut expr = format!(
+        "nx_db::IndexSchema::new(\"{}\", {}, {})",
+        escape_string(&index.id),
+        index_kind_expr(index.kind),
+        string_slice_expr(&index.attributes),
+    );
+
+    if !index.orders.is_empty() {
+        expr.push_str(&format!(
+            ".orders(&[{}])",
+            index
+                .orders
+                .iter()
+                .map(|order| order_expr(*order))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+
+    expr
 }
 
 fn storage_field_base_type(collection: &CollectionSpec, attribute: &AttributeSpec) -> String {
@@ -1907,34 +1825,35 @@ mod tests {
         let output = generate(&spec).expect("code should generate");
 
         assert!(output.contains("pub mod app_models"));
-        assert!(output.contains("pub struct User;"));
+        assert!(output.contains("nx_db::declare_model! {"));
         assert!(output.contains("pub struct UserEntity"));
         assert!(output.contains("pub struct CreateUser"));
         assert!(output.contains("pub struct UpdateUser"));
         assert!(output.contains("pub id: Option<UserId>"));
-        assert!(output.contains("nx_db::impl_create_builder! { create: CreateUser, id: UserId"));
-        assert!(output.contains("required: { name: crate::codecs::DisplayName, active: bool }"));
+        assert!(output.contains("const: USER"));
+        assert!(output.contains("USER_ID => ID: UserId = FIELD_ID"));
         assert!(output.contains("Patch<Option<String>>"));
         assert!(output.contains("pub name: crate::codecs::DisplayName"));
         assert!(output.contains("pub profile_label: Option<String>"));
         assert!(output.contains("fn encode_user_name(value: crate::codecs::DisplayName)"));
         assert!(output.contains("crate::codecs::encode_display_name(value)?;"));
         assert!(output.contains("fn decode_user_name(value: String)"));
-        assert!(
-            output.contains("pub const USER_NAME: EncodedField<User, crate::codecs::DisplayName>")
-        );
+        assert!(output.contains(
+            "USER_NAME => NAME: crate::codecs::DisplayName = \"name\" => encode_query_user_name"
+        ));
         assert!(output.contains("fn encode_query_user_name(value: crate::codecs::DisplayName) -> Result<nx_db::traits::storage::StorageValue, DatabaseError>"));
-        assert!(output.contains("persistence: AttributePersistence::Virtual"));
+        assert!(
+            output.contains(
+                "AttributeSchema::virtual_field(\"profileLabel\", AttributeKind::Virtual)"
+            )
+        );
         assert!(output.contains("const USERS_INDEXES: &[nx_db::IndexSchema] = &["));
-        assert!(output.contains("id: \"users_name_idx\""));
-        assert!(output.contains("kind: nx_db::IndexKind::Key"));
-        assert!(output.contains("orders: &[nx_db::Order::Asc]"));
-        assert!(output.contains("virtuals: { profile_label }"));
+        assert!(output.contains("nx_db::IndexSchema::new(\"users_name_idx\", nx_db::IndexKind::Key, &[\"name\"]).orders(&[nx_db::Order::Asc])"));
         assert!(
             output
-                .contains("resolvers: { profile_label : crate::resolvers::resolve_profile_label }")
+                .contains("#[nx(virtual, resolve = \"crate::resolvers::resolve_profile_label\")]")
         );
-        assert!(output.contains("pub fn registry() -> Result<StaticRegistry, DatabaseError>"));
+        assert!(output.contains("nx_db::impl_registry_fn! {"));
     }
 
     #[test]
@@ -1944,11 +1863,9 @@ mod tests {
         let output = generate(&spec).expect("code should generate");
 
         assert!(output.contains(
-            "pub const USER_ROLES_REL: nx_db::Rel<User, Role> = nx_db::Rel::<User, Role>::many_to_many(\"roles\", \"user_roles\", \"userId\", \"roleId\")"
+            "nx_db::impl_relation_many! { rel_const: USER_ROLES_REL, populate_const: USER_ROLES_POPULATE, rel_expr: nx_db::Rel::<User, Role>::many_to_many(\"roles\", \"user_roles\", \"userId\", \"roleId\")"
         ));
         assert!(output.contains("pub roles: nx_db::RelationMany<RoleEntity>"));
-        assert!(output.contains("through_collection: Some(\"user_roles\")"));
-        assert!(output.contains("through_local_field: Some(\"userId\")"));
-        assert!(output.contains("through_remote_field: Some(\"roleId\")"));
+        assert!(output.contains(".through(\"user_roles\", \"userId\", \"roleId\")"));
     }
 }

@@ -5,240 +5,158 @@
 #[allow(unused_imports)]
 pub mod app_models {
     use nx_db::traits::storage::StorageRecord;
-    use nx_db::{
-        AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context,
-        DatabaseError, FIELD_CREATED_AT, FIELD_ID, FIELD_PERMISSIONS, FIELD_SEQUENCE,
-        FIELD_UPDATED_AT, Field, Key, Model, Patch, QuerySpec, RelationshipKind,
-        RelationshipSchema, RelationshipSide, StaticRegistry, get_optional, get_required,
-        insert_value, take_optional, take_required,
-    };
+    use nx_db::{insert_value, take_optional, take_required, get_optional, get_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, Field, Key, Model, Patch, QuerySpec, RelationshipKind, RelationshipSchema, RelationshipSide, StaticRegistry, FIELD_ID, FIELD_SEQUENCE, FIELD_CREATED_AT, FIELD_UPDATED_AT, FIELD_PERMISSIONS};
 
     pub type UserId = Key<48>;
 
-    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize, nx_db::NxEntity)]
+    #[serde(rename_all = "camelCase")]
     pub struct UserEntity {
+        #[nx(id)]
         pub id: UserId,
+        #[nx(field = "name", required)]
         pub name: String,
+        #[nx(field = "email")]
         pub email: Option<String>,
+        #[nx(field = "active", required)]
         pub active: bool,
+        #[serde(flatten)]
+        #[nx(metadata)]
         pub _metadata: nx_db::Metadata,
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, ::serde::Serialize, ::serde::Deserialize, nx_db::NxCreate)]
+    #[serde(rename_all = "camelCase")]
     pub struct CreateUser {
+        #[nx(id)]
         pub id: Option<UserId>,
+        #[nx(field = "name", required)]
         pub name: String,
+        #[nx(field = "email")]
         pub email: Option<String>,
+        #[nx(field = "active", required)]
         pub active: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[nx(permissions)]
         pub permissions: Vec<String>,
     }
 
-    nx_db::impl_create_builder! { create: CreateUser, id: UserId, required: { name: String, active: bool }, optional: { email: Option<String> } }
-
-    #[derive(Debug, Clone, Default)]
+    #[derive(Debug, Clone, Default, nx_db::NxUpdate)]
     pub struct UpdateUser {
+        #[nx(field = "name")]
         pub name: Patch<String>,
+        #[nx(field = "email")]
         pub email: Patch<Option<String>>,
+        #[nx(field = "active")]
         pub active: Patch<bool>,
+        #[nx(permissions)]
         pub permissions: Patch<Vec<String>>,
     }
 
-    #[derive(Debug, Clone, Copy)]
-    pub struct User;
-    pub const USER: User = User;
-
-    pub const USER_ID: Field<User, UserId> = Field::new(FIELD_ID);
-    pub const USER_NAME: Field<User, String> = Field::new("name");
-    pub const USER_EMAIL: Field<User, Option<String>> = Field::new("email");
-    pub const USER_ACTIVE: Field<User, bool> = Field::new("active");
+    nx_db::declare_model! {
+        name: User,
+        const: USER,
+        entity: UserEntity,
+        create: CreateUser,
+        update: UpdateUser,
+        schema: USERS_SCHEMA,
+        plain: {
+            USER_ID => ID: UserId = FIELD_ID,
+            USER_NAME => NAME: String = "name",
+            USER_EMAIL => EMAIL: Option<String> = "email",
+            USER_ACTIVE => ACTIVE: bool = "active",
+        },
+        encoded: {
+        }
+    }
 
     const USERS_ATTRIBUTES: &[AttributeSchema] = &[
-        AttributeSchema {
-            id: "name",
-            column: "name",
-            kind: AttributeKind::String,
-            required: true,
-            array: false,
-            length: None,
-            default: None,
-            persistence: AttributePersistence::Persisted,
-            filters: &[],
-            elements: None,
-            relationship: None,
-        },
-        AttributeSchema {
-            id: "email",
-            column: "email",
-            kind: AttributeKind::String,
-            required: false,
-            array: false,
-            length: None,
-            default: None,
-            persistence: AttributePersistence::Persisted,
-            filters: &[],
-            elements: None,
-            relationship: None,
-        },
-        AttributeSchema {
-            id: "active",
-            column: "active",
-            kind: AttributeKind::Boolean,
-            required: true,
-            array: false,
-            length: None,
-            default: None,
-            persistence: AttributePersistence::Persisted,
-            filters: &[],
-            elements: None,
-            relationship: None,
-        },
+        AttributeSchema::persisted("name", "name", AttributeKind::String).required(),
+        AttributeSchema::persisted("email", "email", AttributeKind::String),
+        AttributeSchema::persisted("active", "active", AttributeKind::Boolean).required(),
     ];
     const USERS_INDEXES: &[nx_db::IndexSchema] = &[
-        nx_db::IndexSchema {
-            id: "users_email_unique",
-            kind: nx_db::IndexKind::Unique,
-            attributes: &["email"],
-            orders: &[],
-        },
-        nx_db::IndexSchema {
-            id: "users_name_active_idx",
-            kind: nx_db::IndexKind::Key,
-            attributes: &["name", "active"],
-            orders: &[nx_db::Order::Asc, nx_db::Order::Desc],
-        },
+        nx_db::IndexSchema::new("users_email_unique", nx_db::IndexKind::Unique, &["email"]),
+        nx_db::IndexSchema::new("users_name_active_idx", nx_db::IndexKind::Key, &["name", "active"]).orders(&[nx_db::Order::Asc, nx_db::Order::Desc]),
     ];
-    pub static USERS_SCHEMA: CollectionSchema = CollectionSchema {
-        id: "users",
-        name: "Users",
-        document_security: true,
-        enabled: true,
-        permissions: &[
-            "read(\"any\")",
-            "create(\"any\")",
-            "update(\"any\")",
-            "delete(\"any\")",
-        ],
-        attributes: USERS_ATTRIBUTES,
-        indexes: USERS_INDEXES,
-    };
-    impl User {
-        pub const ID: Field<User, UserId> = Field::new(FIELD_ID);
-        pub const NAME: Field<User, String> = Field::new("name");
-        pub const EMAIL: Field<User, Option<String>> = Field::new("email");
-        pub const ACTIVE: Field<User, bool> = Field::new("active");
-    }
-    nx_db::impl_model! { name: User, id: UserId, entity: UserEntity, create: CreateUser, update: UpdateUser, schema: USERS_SCHEMA, fields: {                 "name" => name : String :required,                 "email" => email : Option<String>,                 "active" => active : bool :required } }
+    pub static USERS_SCHEMA: CollectionSchema = CollectionSchema::new("users", "Users").document_security(true).permissions(&["read(\"any\")", "create(\"any\")", "update(\"any\")", "delete(\"any\")"]).attributes(USERS_ATTRIBUTES).indexes(USERS_INDEXES);
     pub type SessionId = Key<48>;
 
-    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize, nx_db::NxEntity)]
+    #[serde(rename_all = "camelCase")]
     pub struct SessionEntity {
+        #[nx(id)]
         pub id: SessionId,
+        #[nx(field = "userId", required)]
         pub user_id: String,
+        #[nx(field = "token", required)]
         pub token: String,
+        #[nx(field = "revoked", required)]
         pub revoked: bool,
+        #[serde(flatten)]
+        #[nx(metadata)]
         pub _metadata: nx_db::Metadata,
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, ::serde::Serialize, ::serde::Deserialize, nx_db::NxCreate)]
+    #[serde(rename_all = "camelCase")]
     pub struct CreateSession {
+        #[nx(id)]
         pub id: Option<SessionId>,
+        #[nx(field = "userId", required)]
         pub user_id: String,
+        #[nx(field = "token", required)]
         pub token: String,
+        #[nx(field = "revoked", required)]
         pub revoked: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[nx(permissions)]
         pub permissions: Vec<String>,
     }
 
-    nx_db::impl_create_builder! { create: CreateSession, id: SessionId, required: { user_id: String, token: String, revoked: bool }, optional: {  } }
-
-    #[derive(Debug, Clone, Default)]
+    #[derive(Debug, Clone, Default, nx_db::NxUpdate)]
     pub struct UpdateSession {
+        #[nx(field = "userId")]
         pub user_id: Patch<String>,
+        #[nx(field = "token")]
         pub token: Patch<String>,
+        #[nx(field = "revoked")]
         pub revoked: Patch<bool>,
+        #[nx(permissions)]
         pub permissions: Patch<Vec<String>>,
     }
 
-    #[derive(Debug, Clone, Copy)]
-    pub struct Session;
-    pub const SESSION: Session = Session;
-
-    pub const SESSION_ID: Field<Session, SessionId> = Field::new(FIELD_ID);
-    pub const SESSION_USER_ID: Field<Session, String> = Field::new("userId");
-    pub const SESSION_TOKEN: Field<Session, String> = Field::new("token");
-    pub const SESSION_REVOKED: Field<Session, bool> = Field::new("revoked");
+    nx_db::declare_model! {
+        name: Session,
+        const: SESSION,
+        entity: SessionEntity,
+        create: CreateSession,
+        update: UpdateSession,
+        schema: SESSIONS_SCHEMA,
+        plain: {
+            SESSION_ID => ID: SessionId = FIELD_ID,
+            SESSION_USER_ID => USER_ID: String = "userId",
+            SESSION_TOKEN => TOKEN: String = "token",
+            SESSION_REVOKED => REVOKED: bool = "revoked",
+        },
+        encoded: {
+        }
+    }
 
     const SESSIONS_ATTRIBUTES: &[AttributeSchema] = &[
-        AttributeSchema {
-            id: "userId",
-            column: "user_id",
-            kind: AttributeKind::Relationship,
-            required: true,
-            array: false,
-            length: None,
-            default: None,
-            persistence: AttributePersistence::Persisted,
-            filters: &[],
-            elements: None,
-            relationship: None,
-        },
-        AttributeSchema {
-            id: "token",
-            column: "token",
-            kind: AttributeKind::String,
-            required: true,
-            array: false,
-            length: None,
-            default: None,
-            persistence: AttributePersistence::Persisted,
-            filters: &[],
-            elements: None,
-            relationship: None,
-        },
-        AttributeSchema {
-            id: "revoked",
-            column: "revoked",
-            kind: AttributeKind::Boolean,
-            required: true,
-            array: false,
-            length: None,
-            default: None,
-            persistence: AttributePersistence::Persisted,
-            filters: &[],
-            elements: None,
-            relationship: None,
-        },
+        AttributeSchema::persisted("userId", "user_id", AttributeKind::Relationship).required(),
+        AttributeSchema::persisted("token", "token", AttributeKind::String).required(),
+        AttributeSchema::persisted("revoked", "revoked", AttributeKind::Boolean).required(),
     ];
-    const SESSIONS_INDEXES: &[nx_db::IndexSchema] = &[nx_db::IndexSchema {
-        id: "sessions_user_token_idx",
-        kind: nx_db::IndexKind::Key,
-        attributes: &["userId", "token"],
-        orders: &[nx_db::Order::Asc, nx_db::Order::Asc],
-    }];
-    pub static SESSIONS_SCHEMA: CollectionSchema = CollectionSchema {
-        id: "sessions",
-        name: "Sessions",
-        document_security: true,
-        enabled: true,
-        permissions: &[
-            "read(\"users\")",
-            "create(\"users\")",
-            "update(\"users\")",
-            "delete(\"users\")",
-        ],
-        attributes: SESSIONS_ATTRIBUTES,
-        indexes: SESSIONS_INDEXES,
-    };
-    impl Session {
-        pub const ID: Field<Session, SessionId> = Field::new(FIELD_ID);
-        pub const USER_ID: Field<Session, String> = Field::new("userId");
-        pub const TOKEN: Field<Session, String> = Field::new("token");
-        pub const REVOKED: Field<Session, bool> = Field::new("revoked");
-    }
-    nx_db::impl_model! { name: Session, id: SessionId, entity: SessionEntity, create: CreateSession, update: UpdateSession, schema: SESSIONS_SCHEMA, fields: {                 "userId" => user_id : String :required,                 "token" => token : String :required,                 "revoked" => revoked : bool :required } }
-    pub fn registry() -> Result<StaticRegistry, DatabaseError> {
-        let registry = StaticRegistry::new()
-            .register(&USERS_SCHEMA)?
-            .register(&SESSIONS_SCHEMA)?;
-        Ok(registry)
+    const SESSIONS_INDEXES: &[nx_db::IndexSchema] = &[
+        nx_db::IndexSchema::new("sessions_user_token_idx", nx_db::IndexKind::Key, &["userId", "token"]).orders(&[nx_db::Order::Asc, nx_db::Order::Asc]),
+    ];
+    pub static SESSIONS_SCHEMA: CollectionSchema = CollectionSchema::new("sessions", "Sessions").document_security(true).permissions(&["read(\"users\")", "create(\"users\")", "update(\"users\")", "delete(\"users\")"]).attributes(SESSIONS_ATTRIBUTES).indexes(SESSIONS_INDEXES);
+    nx_db::impl_registry_fn! {
+        fn: registry,
+        schemas: [
+            USERS_SCHEMA,
+            SESSIONS_SCHEMA,
+        ]
     }
 }

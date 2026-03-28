@@ -377,6 +377,10 @@ impl<T> Default for RelationOne<T> {
 }
 
 impl<T> RelationOne<T> {
+    pub fn is_not_loaded(&self) -> bool {
+        matches!(self, Self::NotLoaded)
+    }
+
     pub fn get(&self) -> Option<&T> {
         match self {
             Self::Loaded(Some(value)) => Some(value),
@@ -409,6 +413,10 @@ impl<T> Default for RelationMany<T> {
 }
 
 impl<T> RelationMany<T> {
+    pub fn is_not_loaded(&self) -> bool {
+        matches!(self, Self::NotLoaded)
+    }
+
     pub fn as_slice(&self) -> Option<&[T]> {
         match self {
             Self::Loaded(values) => Some(values.as_slice()),
@@ -435,6 +443,10 @@ impl<T> Default for Populated<T> {
 }
 
 impl<T> Populated<T> {
+    pub fn is_not_loaded(&self) -> bool {
+        matches!(self, Self::NotLoaded)
+    }
+
     /// Return a reference to the loaded entity, if any.
     pub fn get(&self) -> Option<&T> {
         match self {

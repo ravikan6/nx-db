@@ -45,7 +45,9 @@ enum FieldRole {
         encode: Option<Path>,
         decode: Option<Path>,
     },
-    Virtual,
+    Virtual {
+        resolve: Option<Path>,
+    },
     Loaded,
     LoadedOne,
     LoadedMany,
@@ -78,6 +80,7 @@ fn expand_entity(input: DeriveInput) -> syn::Result<TokenStream2> {
 
     let mut persisted_inits = Vec::new();
     let mut virtual_inits = Vec::new();
+    let mut resolve_inits = Vec::new();
     let mut loaded_inits = Vec::new();
     let mut loaded_one_inits = Vec::new();
     let mut loaded_many_inits = Vec::new();
@@ -106,9 +109,14 @@ fn expand_entity(input: DeriveInput) -> syn::Result<TokenStream2> {
                 };
                 persisted_inits.push(quote! { #ident: #value, });
             }
-            FieldRole::Virtual => {
+            FieldRole::Virtual { resolve } => {
                 let ident = &field.ident;
                 virtual_inits.push(quote! { #ident: None, });
+                if let Some(resolve) = resolve {
+                    resolve_inits.push(quote! {
+                        entity.#ident = Some(#resolve(&entity, context).await?);
+                    });
+                }
             }
             FieldRole::Loaded => {
                 let ident = &field.ident;
@@ -155,6 +163,16 @@ fn expand_entity(input: DeriveInput) -> syn::Result<TokenStream2> {
                     #(#loaded_inits)*
                     #(#loaded_one_inits)*
                     #(#loaded_many_inits)*
+                })
+            }
+
+            fn resolve_entity<'a>(
+                mut entity: Self,
+                context: &'a ::nx_db::Context,
+            ) -> ::nx_db::ModelFuture<'a, Result<Self, ::nx_db::DatabaseError>> {
+                Box::pin(async move {
+                    #(#resolve_inits)*
+                    Ok(entity)
                 })
             }
         }
@@ -242,7 +260,7 @@ fn expand_create(input: DeriveInput) -> syn::Result<TokenStream2> {
                 init_fields.push(quote! { #ident: Vec::new(), });
             }
             FieldRole::Metadata
-            | FieldRole::Virtual
+            | FieldRole::Virtual { .. }
             | FieldRole::Loaded
             | FieldRole::LoadedOne
             | FieldRole::LoadedMany => {
@@ -354,7 +372,7 @@ fn expand_update(input: DeriveInput) -> syn::Result<TokenStream2> {
             }
             FieldRole::Id
             | FieldRole::Metadata
-            | FieldRole::Virtual
+            | FieldRole::Virtual { .. }
             | FieldRole::Loaded
             | FieldRole::LoadedOne
             | FieldRole::LoadedMany => {
@@ -434,6 +452,7 @@ fn parse_field_role(field: &syn::Field) -> syn::Result<FieldRole> {
     let mut field_name: Option<String> = None;
     let mut encode: Option<Path> = None;
     let mut decode: Option<Path> = None;
+    let mut resolve: Option<Path> = None;
 
     for attr in &field.attrs {
         if !attr.path().is_ident("nx") {
@@ -488,6 +507,11 @@ fn parse_field_role(field: &syn::Field) -> syn::Result<FieldRole> {
                 decode = Some(syn::parse_str(&value.value())?);
                 return Ok(());
             }
+            if meta.path.is_ident("resolve") {
+                let value = meta.value()?.parse::<LitStr>()?;
+                resolve = Some(syn::parse_str(&value.value())?);
+                return Ok(());
+            }
 
             Err(meta.error("unsupported #[nx(...)] option"))
         })?;
@@ -523,7 +547,13 @@ fn parse_field_role(field: &syn::Field) -> syn::Result<FieldRole> {
         return Ok(FieldRole::Permissions);
     }
     if flag_virtual {
-        return Ok(FieldRole::Virtual);
+        return Ok(FieldRole::Virtual { resolve });
+    }
+    if resolve.is_some() {
+        return Err(syn::Error::new_spanned(
+            field,
+            "#[nx(resolve = ...)] is only valid together with #[nx(virtual)]",
+        ));
     }
     if flag_loaded {
         return Ok(FieldRole::Loaded);

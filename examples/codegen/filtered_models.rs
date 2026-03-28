@@ -5,58 +5,70 @@
 #[allow(unused_imports)]
 pub mod filtered_app_models {
     use nx_db::traits::storage::StorageRecord;
-    use nx_db::{
-        AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context,
-        DatabaseError, EncodedField, FIELD_CREATED_AT, FIELD_ID, FIELD_PERMISSIONS, FIELD_SEQUENCE,
-        FIELD_UPDATED_AT, Field, Key, Model, Patch, QuerySpec, RelationshipKind,
-        RelationshipSchema, RelationshipSide, StaticRegistry, get_optional, get_required,
-        insert_value, take_optional, take_required,
-    };
+    use nx_db::{insert_value, take_optional, take_required, get_optional, get_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, EncodedField, Field, Key, Model, Patch, QuerySpec, RelationshipKind, RelationshipSchema, RelationshipSide, StaticRegistry, FIELD_ID, FIELD_SEQUENCE, FIELD_CREATED_AT, FIELD_UPDATED_AT, FIELD_PERMISSIONS};
 
     pub type UserId = Key<48>;
 
-    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize)]
+    #[derive(Debug, Clone, PartialEq, ::serde::Serialize, ::serde::Deserialize, nx_db::NxEntity)]
+    #[serde(rename_all = "camelCase")]
     pub struct UserEntity {
+        #[nx(id)]
         pub id: UserId,
+        #[nx(field = "name", required, decode = "decode_user_name")]
         pub name: crate::DisplayName,
+        #[nx(field = "active", required)]
         pub active: bool,
+        #[serde(flatten)]
+        #[nx(metadata)]
         pub _metadata: nx_db::Metadata,
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, ::serde::Serialize, ::serde::Deserialize, nx_db::NxCreate)]
+    #[serde(rename_all = "camelCase")]
     pub struct CreateUser {
+        #[nx(id)]
         pub id: Option<UserId>,
+        #[nx(field = "name", required, encode = "encode_user_name")]
         pub name: crate::DisplayName,
+        #[nx(field = "active", required)]
         pub active: bool,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        #[nx(permissions)]
         pub permissions: Vec<String>,
     }
 
-    nx_db::impl_create_builder! { create: CreateUser, id: UserId, required: { name: crate::DisplayName, active: bool }, optional: {  } }
-
-    #[derive(Debug, Clone, Default)]
+    #[derive(Debug, Clone, Default, nx_db::NxUpdate)]
     pub struct UpdateUser {
+        #[nx(field = "name", encode = "encode_user_name")]
         pub name: Patch<crate::DisplayName>,
+        #[nx(field = "active")]
         pub active: Patch<bool>,
+        #[nx(permissions)]
         pub permissions: Patch<Vec<String>>,
     }
 
-    #[derive(Debug, Clone, Copy)]
-    pub struct User;
-    pub const USER: User = User;
-
-    pub const USER_ID: Field<User, UserId> = Field::new(FIELD_ID);
-    pub const USER_NAME: EncodedField<User, crate::DisplayName> =
-        EncodedField::new("name", encode_query_user_name);
-    pub const USER_ACTIVE: Field<User, bool> = Field::new("active");
+    nx_db::declare_model! {
+        name: User,
+        const: USER,
+        entity: UserEntity,
+        create: CreateUser,
+        update: UpdateUser,
+        schema: USERS_SCHEMA,
+        plain: {
+            USER_ID => ID: UserId = FIELD_ID,
+            USER_ACTIVE => ACTIVE: bool = "active",
+        },
+        encoded: {
+            USER_NAME => NAME: crate::DisplayName = "name" => encode_query_user_name,
+        }
+    }
 
     fn encode_user_name(value: crate::DisplayName) -> Result<String, DatabaseError> {
         let value = crate::codecs::encode_display_name(value)?;
         Ok(value)
     }
 
-    fn encode_query_user_name(
-        value: crate::DisplayName,
-    ) -> Result<nx_db::traits::storage::StorageValue, DatabaseError> {
+    fn encode_query_user_name(value: crate::DisplayName) -> Result<nx_db::traits::storage::StorageValue, DatabaseError> {
         Ok(nx_db::IntoStorage::into_storage(encode_user_name(value)?))
     }
 
@@ -66,57 +78,16 @@ pub mod filtered_app_models {
     }
 
     const USERS_ATTRIBUTES: &[AttributeSchema] = &[
-        AttributeSchema {
-            id: "name",
-            column: "name",
-            kind: AttributeKind::String,
-            required: true,
-            array: false,
-            length: None,
-            default: None,
-            persistence: AttributePersistence::Persisted,
-            filters: &["displayName"],
-            elements: None,
-            relationship: None,
-        },
-        AttributeSchema {
-            id: "active",
-            column: "active",
-            kind: AttributeKind::Boolean,
-            required: true,
-            array: false,
-            length: None,
-            default: None,
-            persistence: AttributePersistence::Persisted,
-            filters: &[],
-            elements: None,
-            relationship: None,
-        },
+        AttributeSchema::persisted("name", "name", AttributeKind::String).required().filters(&["displayName"]),
+        AttributeSchema::persisted("active", "active", AttributeKind::Boolean).required(),
     ];
-    const USERS_INDEXES: &[nx_db::IndexSchema] = &[];
-    pub static USERS_SCHEMA: CollectionSchema = CollectionSchema {
-        id: "users",
-        name: "Users",
-        document_security: true,
-        enabled: true,
-        permissions: &[
-            "read(\"any\")",
-            "create(\"any\")",
-            "update(\"any\")",
-            "delete(\"any\")",
-        ],
-        attributes: USERS_ATTRIBUTES,
-        indexes: USERS_INDEXES,
-    };
-    impl User {
-        pub const ID: Field<User, UserId> = Field::new(FIELD_ID);
-        pub const NAME: EncodedField<User, crate::DisplayName> =
-            EncodedField::new("name", encode_query_user_name);
-        pub const ACTIVE: Field<User, bool> = Field::new("active");
-    }
-    nx_db::impl_model! { name: User, id: UserId, entity: UserEntity, create: CreateUser, update: UpdateUser, schema: USERS_SCHEMA, fields: {                 "name" => name : String [encode_user_name, decode_user_name] :required,                 "active" => active : bool :required } }
-    pub fn registry() -> Result<StaticRegistry, DatabaseError> {
-        let registry = StaticRegistry::new().register(&USERS_SCHEMA)?;
-        Ok(registry)
+    const USERS_INDEXES: &[nx_db::IndexSchema] = &[
+    ];
+    pub static USERS_SCHEMA: CollectionSchema = CollectionSchema::new("users", "Users").document_security(true).permissions(&["read(\"any\")", "create(\"any\")", "update(\"any\")", "delete(\"any\")"]).attributes(USERS_ATTRIBUTES).indexes(USERS_INDEXES);
+    nx_db::impl_registry_fn! {
+        fn: registry,
+        schemas: [
+            USERS_SCHEMA,
+        ]
     }
 }

@@ -58,6 +58,49 @@ pub struct CollectionSchema {
 }
 
 impl CollectionSchema {
+    /// Create a collection schema with sensible defaults.
+    pub const fn new(id: &'static str, name: &'static str) -> Self {
+        Self {
+            id,
+            name,
+            document_security: true,
+            enabled: true,
+            permissions: &[],
+            attributes: &[],
+            indexes: &[],
+        }
+    }
+
+    pub const fn document_security(self, document_security: bool) -> Self {
+        let mut schema = self;
+        schema.document_security = document_security;
+        schema
+    }
+
+    pub const fn enabled(self, enabled: bool) -> Self {
+        let mut schema = self;
+        schema.enabled = enabled;
+        schema
+    }
+
+    pub const fn permissions(self, permissions: &'static [&'static str]) -> Self {
+        let mut schema = self;
+        schema.permissions = permissions;
+        schema
+    }
+
+    pub const fn attributes(self, attributes: &'static [AttributeSchema]) -> Self {
+        let mut schema = self;
+        schema.attributes = attributes;
+        schema
+    }
+
+    pub const fn indexes(self, indexes: &'static [IndexSchema]) -> Self {
+        let mut schema = self;
+        schema.indexes = indexes;
+        schema
+    }
+
     /// Find an attribute by its logical id.
     pub fn attribute(&self, id: &str) -> Option<&AttributeSchema> {
         self.attributes.iter().find(|a| a.id == id)
@@ -224,6 +267,82 @@ pub struct AttributeSchema {
     pub relationship: Option<RelationshipSchema>,
 }
 
+impl AttributeSchema {
+    pub const fn persisted(id: &'static str, column: &'static str, kind: AttributeKind) -> Self {
+        Self {
+            id,
+            column,
+            kind,
+            required: false,
+            array: false,
+            length: None,
+            default: None,
+            persistence: AttributePersistence::Persisted,
+            filters: &[],
+            elements: None,
+            relationship: None,
+        }
+    }
+
+    pub const fn virtual_field(id: &'static str, kind: AttributeKind) -> Self {
+        Self {
+            id,
+            column: "",
+            kind,
+            required: false,
+            array: false,
+            length: None,
+            default: None,
+            persistence: AttributePersistence::Virtual,
+            filters: &[],
+            elements: None,
+            relationship: None,
+        }
+    }
+
+    pub const fn required(self) -> Self {
+        let mut attribute = self;
+        attribute.required = true;
+        attribute
+    }
+
+    pub const fn array(self) -> Self {
+        let mut attribute = self;
+        attribute.array = true;
+        attribute
+    }
+
+    pub const fn length(self, length: usize) -> Self {
+        let mut attribute = self;
+        attribute.length = Some(length);
+        attribute
+    }
+
+    pub const fn default(self, default: DefaultValue) -> Self {
+        let mut attribute = self;
+        attribute.default = Some(default);
+        attribute
+    }
+
+    pub const fn filters(self, filters: &'static [&'static str]) -> Self {
+        let mut attribute = self;
+        attribute.filters = filters;
+        attribute
+    }
+
+    pub const fn enum_elements(self, elements: &'static [&'static str]) -> Self {
+        let mut attribute = self;
+        attribute.elements = Some(elements);
+        attribute
+    }
+
+    pub const fn relationship(self, relationship: RelationshipSchema) -> Self {
+        let mut attribute = self;
+        attribute.relationship = Some(relationship);
+        attribute
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AttributePersistence {
     Persisted,
@@ -243,12 +362,79 @@ pub struct RelationshipSchema {
     pub on_delete: OnDeleteAction,
 }
 
+impl RelationshipSchema {
+    pub const fn new(
+        related_collection: &'static str,
+        kind: RelationshipKind,
+        side: RelationshipSide,
+    ) -> Self {
+        Self {
+            related_collection,
+            kind,
+            side,
+            two_way: false,
+            two_way_key: None,
+            through_collection: None,
+            through_local_field: None,
+            through_remote_field: None,
+            on_delete: OnDeleteAction::Restrict,
+        }
+    }
+
+    pub const fn two_way(self, two_way_key: Option<&'static str>) -> Self {
+        let mut relationship = self;
+        relationship.two_way = true;
+        relationship.two_way_key = two_way_key;
+        relationship
+    }
+
+    pub const fn through(
+        self,
+        through_collection: &'static str,
+        through_local_field: &'static str,
+        through_remote_field: &'static str,
+    ) -> Self {
+        let mut relationship = self;
+        relationship.through_collection = Some(through_collection);
+        relationship.through_local_field = Some(through_local_field);
+        relationship.through_remote_field = Some(through_remote_field);
+        relationship
+    }
+
+    pub const fn on_delete(self, on_delete: OnDeleteAction) -> Self {
+        let mut relationship = self;
+        relationship.on_delete = on_delete;
+        relationship
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IndexSchema {
     pub id: &'static str,
     pub kind: IndexKind,
     pub attributes: &'static [&'static str],
     pub orders: &'static [Order],
+}
+
+impl IndexSchema {
+    pub const fn new(
+        id: &'static str,
+        kind: IndexKind,
+        attributes: &'static [&'static str],
+    ) -> Self {
+        Self {
+            id,
+            kind,
+            attributes,
+            orders: &[],
+        }
+    }
+
+    pub const fn orders(self, orders: &'static [Order]) -> Self {
+        let mut index = self;
+        index.orders = orders;
+        index
+    }
 }
 
 impl crate::traits::migration::MigrationCollection for &'static CollectionSchema {

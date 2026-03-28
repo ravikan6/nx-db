@@ -217,6 +217,217 @@ macro_rules! impl_create_builder {
     };
 }
 
+/// Generate top-level and associated field constants for a model.
+#[macro_export]
+macro_rules! impl_model_fields {
+    (
+        model: $model_name:ident,
+        plain: { $($plain_top:ident => $plain_assoc:ident : $plain_ty:ty = $plain_name:expr),* $(,)? },
+        encoded: { $($encoded_top:ident => $encoded_assoc:ident : $encoded_ty:ty = $encoded_name:expr => $encoded_fn:expr),* $(,)? }
+    ) => {
+        impl $model_name {
+            $(
+                pub const $plain_assoc: $crate::Field<$model_name, $plain_ty> =
+                    $crate::Field::new($plain_name);
+            )*
+
+            $(
+                pub const $encoded_assoc: $crate::EncodedField<$model_name, $encoded_ty> =
+                    $crate::EncodedField::new($encoded_name, $encoded_fn);
+            )*
+        }
+
+        $(
+            pub const $plain_top: $crate::Field<$model_name, $plain_ty> =
+                $crate::Field::new($plain_name);
+        )*
+
+        $(
+            pub const $encoded_top: $crate::EncodedField<$model_name, $encoded_ty> =
+                $crate::EncodedField::new($encoded_name, $encoded_fn);
+        )*
+    };
+}
+
+/// Declare a model marker, singleton constant, field constants, and record
+/// bridge in one place.
+#[macro_export]
+macro_rules! declare_model {
+    (
+        name: $model_name:ident,
+        const: $model_const:ident,
+        entity: $entity_name:ty,
+        create: $create_name:ty,
+        update: $update_name:ty,
+        schema: $schema_const:ident,
+        plain: { $($plain_top:ident => $plain_assoc:ident : $plain_ty:ty = $plain_name:expr),* $(,)? },
+        encoded: { $($encoded_top:ident => $encoded_assoc:ident : $encoded_ty:ty = $encoded_name:expr => $encoded_fn:expr),* $(,)? }
+    ) => {
+        #[derive(Debug, Clone, Copy)]
+        pub struct $model_name;
+
+        pub const $model_const: $model_name = $model_name;
+
+        $crate::impl_model_fields! {
+            model: $model_name,
+            plain: { $($plain_top => $plain_assoc : $plain_ty = $plain_name),* },
+            encoded: { $($encoded_top => $encoded_assoc : $encoded_ty = $encoded_name => $encoded_fn),* }
+        }
+
+        $crate::impl_model_record_bridge! {
+            name: $model_name,
+            entity: $entity_name,
+            create: $create_name,
+            update: $update_name,
+            schema: $schema_const
+        }
+    };
+}
+
+/// Generate the helper functions and populate descriptor for a to-one relation.
+#[macro_export]
+macro_rules! impl_populate_one {
+    (
+        const: $const_name:ident,
+        local_fn: $local_fn:ident,
+        remote_fn: $remote_fn:ident,
+        set_fn: $set_fn:ident,
+        model: $model_name:ident,
+        related_model: $related_model_name:ident,
+        entity: $entity_name:ident,
+        related_entity: $related_entity_name:ident,
+        rel: $rel_const:ident,
+        field: $field_name:ident,
+        local_key: |$local_entity:ident| $local_key:expr,
+        remote_key: |$remote_entity:ident| $remote_key:expr
+    ) => {
+        fn $local_fn($local_entity: &$entity_name) -> Option<String> {
+            $local_key
+        }
+
+        fn $remote_fn($remote_entity: &$related_entity_name) -> Option<String> {
+            $remote_key
+        }
+
+        fn $set_fn(entity: &mut $entity_name, value: $crate::RelationOne<$related_entity_name>) {
+            entity.$field_name = value;
+        }
+
+        pub const $const_name: $crate::PopulateOne<$model_name, $related_model_name> =
+            $crate::PopulateOne::new($rel_const, $local_fn, $remote_fn, $set_fn);
+    };
+}
+
+/// Generate a relation descriptor plus the helper functions and populate
+/// descriptor for a to-one relation.
+#[macro_export]
+macro_rules! impl_relation_one {
+    (
+        rel_const: $rel_const:ident,
+        populate_const: $populate_const:ident,
+        rel_expr: $rel_expr:expr,
+        local_fn: $local_fn:ident,
+        remote_fn: $remote_fn:ident,
+        set_fn: $set_fn:ident,
+        model: $model_name:ident,
+        related_model: $related_model_name:ident,
+        entity: $entity_name:ident,
+        related_entity: $related_entity_name:ident,
+        field: $field_name:ident,
+        local_key: |$local_entity:ident| $local_key:expr,
+        remote_key: |$remote_entity:ident| $remote_key:expr
+    ) => {
+        pub const $rel_const: $crate::Rel<$model_name, $related_model_name> = $rel_expr;
+
+        $crate::impl_populate_one! {
+            const: $populate_const,
+            local_fn: $local_fn,
+            remote_fn: $remote_fn,
+            set_fn: $set_fn,
+            model: $model_name,
+            related_model: $related_model_name,
+            entity: $entity_name,
+            related_entity: $related_entity_name,
+            rel: $rel_const,
+            field: $field_name,
+            local_key: |$local_entity| $local_key,
+            remote_key: |$remote_entity| $remote_key
+        }
+    };
+}
+
+/// Generate the helper functions and populate descriptor for a to-many relation.
+#[macro_export]
+macro_rules! impl_populate_many {
+    (
+        const: $const_name:ident,
+        local_fn: $local_fn:ident,
+        remote_fn: $remote_fn:ident,
+        set_fn: $set_fn:ident,
+        model: $model_name:ident,
+        related_model: $related_model_name:ident,
+        entity: $entity_name:ident,
+        related_entity: $related_entity_name:ident,
+        rel: $rel_const:ident,
+        field: $field_name:ident,
+        local_key: |$local_entity:ident| $local_key:expr,
+        remote_key: |$remote_entity:ident| $remote_key:expr
+    ) => {
+        fn $local_fn($local_entity: &$entity_name) -> String {
+            $local_key
+        }
+
+        fn $remote_fn($remote_entity: &$related_entity_name) -> Option<String> {
+            $remote_key
+        }
+
+        fn $set_fn(entity: &mut $entity_name, value: $crate::RelationMany<$related_entity_name>) {
+            entity.$field_name = value;
+        }
+
+        pub const $const_name: $crate::PopulateMany<$model_name, $related_model_name> =
+            $crate::PopulateMany::new($rel_const, $local_fn, $remote_fn, $set_fn);
+    };
+}
+
+/// Generate a relation descriptor plus the helper functions and populate
+/// descriptor for a to-many relation.
+#[macro_export]
+macro_rules! impl_relation_many {
+    (
+        rel_const: $rel_const:ident,
+        populate_const: $populate_const:ident,
+        rel_expr: $rel_expr:expr,
+        local_fn: $local_fn:ident,
+        remote_fn: $remote_fn:ident,
+        set_fn: $set_fn:ident,
+        model: $model_name:ident,
+        related_model: $related_model_name:ident,
+        entity: $entity_name:ident,
+        related_entity: $related_entity_name:ident,
+        field: $field_name:ident,
+        local_key: |$local_entity:ident| $local_key:expr,
+        remote_key: |$remote_entity:ident| $remote_key:expr
+    ) => {
+        pub const $rel_const: $crate::Rel<$model_name, $related_model_name> = $rel_expr;
+
+        $crate::impl_populate_many! {
+            const: $populate_const,
+            local_fn: $local_fn,
+            remote_fn: $remote_fn,
+            set_fn: $set_fn,
+            model: $model_name,
+            related_model: $related_model_name,
+            entity: $entity_name,
+            related_entity: $related_entity_name,
+            rel: $rel_const,
+            field: $field_name,
+            local_key: |$local_entity| $local_key,
+            remote_key: |$remote_entity| $remote_key
+        }
+    };
+}
+
 /// Bridge derive-generated record mappings into a full [`Model`] impl.
 #[macro_export]
 macro_rules! impl_model_record_bridge {
@@ -273,6 +484,19 @@ macro_rules! impl_model_record_bridge {
             {
                 <$entity_name as $crate::EntityRecord>::resolve_entity(entity, context)
             }
+        }
+    };
+}
+
+/// Generate a registry function from a list of schema constants.
+#[macro_export]
+macro_rules! impl_registry_fn {
+    (
+        fn: $fn_name:ident,
+        schemas: [ $($schema_const:ident),* $(,)? ]
+    ) => {
+        pub fn $fn_name() -> Result<$crate::StaticRegistry, $crate::errors::DatabaseError> {
+            $crate::StaticRegistry::new().extend([$( &$schema_const ),*])
         }
     };
 }

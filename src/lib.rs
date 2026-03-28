@@ -102,8 +102,9 @@ pub use database_core::{
 
 // ── Macro re-exports ──────────────────────────────────────────────────────────
 pub use database_core::{
-    and, db_context, db_query, db_registry, impl_create_builder, impl_enum, impl_model,
-    impl_model_record_bridge, not, or,
+    and, db_context, db_query, db_registry, declare_model, impl_create_builder, impl_enum,
+    impl_model, impl_model_fields, impl_model_record_bridge, impl_populate_many, impl_populate_one,
+    impl_registry_fn, impl_relation_many, impl_relation_one, not, or,
 };
 
 // ── Driver feature modules ────────────────────────────────────────────────────
