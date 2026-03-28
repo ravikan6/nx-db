@@ -223,7 +223,7 @@ pub fn permission_rows(
 
     for value in permissions {
         let permission = Permission::parse(value).map_err(|error| {
-            DatabaseError::Other(format!("invalid permission '{value}': {error}"))
+            DatabaseError::Validation(format!("invalid permission '{value}': {error}"))
         })?;
 
         let permission_types = match permission.permission() {

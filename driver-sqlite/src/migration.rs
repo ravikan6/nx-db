@@ -1,4 +1,5 @@
 use crate::driver::SqliteAdapter;
+use crate::error::map_sqlite_error_with_context;
 use crate::utils::SqliteUtils;
 use database_core::errors::DatabaseError;
 use database_core::traits::migration::{MigrationCollection, MigrationIndex};
@@ -71,8 +72,8 @@ impl<'a> MigrationEngine<'a> {
                 .fetch_optional(self.pool)
                 .await
                 .map(|opt| opt.is_some())
-                .map_err(|e| {
-                    DatabaseError::Other(format!("failed to check table existence: {e}"))
+                .map_err(|error| {
+                    map_sqlite_error_with_context("failed to check table existence", error)
                 })?;
 
         if !exists {
@@ -87,7 +88,7 @@ impl<'a> MigrationEngine<'a> {
         ))
         .fetch_all(self.pool)
         .await
-        .map_err(|e| DatabaseError::Other(format!("failed to fetch columns: {e}")))?
+        .map_err(|error| map_sqlite_error_with_context("failed to fetch columns", error))?
         .into_iter()
         .map(|row| row.get::<String, _>(1))
         .collect();
@@ -114,7 +115,7 @@ impl<'a> MigrationEngine<'a> {
         ))
         .fetch_all(self.pool)
         .await
-        .map_err(|e| DatabaseError::Other(format!("failed to fetch indexes: {e}")))?
+        .map_err(|error| map_sqlite_error_with_context("failed to fetch indexes", error))?
         .into_iter()
         .map(|row| row.get::<String, _>(1))
         .collect();
@@ -208,22 +209,24 @@ impl<'a> MigrationEngine<'a> {
                     "CREATE TABLE IF NOT EXISTS {perms_table} (document_id INTEGER NOT NULL REFERENCES {table}({COLUMN_SEQUENCE}) ON DELETE CASCADE, permission_type TEXT NOT NULL, permissions TEXT NOT NULL DEFAULT '[]', PRIMARY KEY (document_id, permission_type))"
                 );
 
-                let mut tx = self
-                    .pool
-                    .begin()
-                    .await
-                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
-                sqlx::query(&sql)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
+                let mut tx = self.pool.begin().await.map_err(|error| {
+                    map_sqlite_error_with_context("failed to start migration transaction", error)
+                })?;
+                sqlx::query(&sql).execute(&mut *tx).await.map_err(|error| {
+                    map_sqlite_error_with_context("failed to create migrated table", error)
+                })?;
                 sqlx::query(&perms_sql)
                     .execute(&mut *tx)
                     .await
-                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
-                tx.commit()
-                    .await
-                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
+                    .map_err(|error| {
+                        map_sqlite_error_with_context(
+                            "failed to create migrated permissions table",
+                            error,
+                        )
+                    })?;
+                tx.commit().await.map_err(|error| {
+                    map_sqlite_error_with_context("failed to commit migration transaction", error)
+                })?;
                 Ok(())
             }
             MigrationChange::AddColumn {
@@ -239,17 +242,15 @@ impl<'a> MigrationEngine<'a> {
                     "ALTER TABLE {table_quoted} ADD COLUMN {column_quoted} {sql_type} {nullable}"
                 );
 
-                self.pool
-                    .execute(sql.as_str())
-                    .await
-                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
+                self.pool.execute(sql.as_str()).await.map_err(|error| {
+                    map_sqlite_error_with_context("failed to add column", error)
+                })?;
                 Ok(())
             }
             MigrationChange::CreateIndex { sql, .. } => {
-                self.pool
-                    .execute(sql.as_str())
-                    .await
-                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
+                self.pool.execute(sql.as_str()).await.map_err(|error| {
+                    map_sqlite_error_with_context("failed to create index", error)
+                })?;
                 Ok(())
             }
         }

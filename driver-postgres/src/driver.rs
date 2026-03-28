@@ -1,3 +1,4 @@
+use crate::error::{map_postgres_error, map_postgres_error_with_context};
 use crate::query::PostgresQuery;
 use crate::utils::PostgresUtils;
 use database_core::errors::DatabaseError;
@@ -74,7 +75,7 @@ impl StorageAdapter for PostgresAdapter {
                 .execute(&pool)
                 .await
                 .map(|_| ())
-                .map_err(|error| DatabaseError::Other(format!("postgres ping failed: {error}")))
+                .map_err(|error| map_postgres_error_with_context("postgres ping failed", error))
         })
     }
 
@@ -247,14 +248,19 @@ impl StorageAdapter for PostgresAdapter {
             }
 
             // ── Execute everything in one transaction ─────────────────────
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let mut tx = pool.begin().await.map_err(|error| {
+                map_postgres_error_with_context(
+                    "failed to start create_collection transaction",
+                    error,
+                )
+            })?;
 
             for stmt in &enum_statements {
-                sqlx::query(stmt).execute(&mut *tx).await.map_err(|e| {
-                    DatabaseError::Other(format!("Enum creation failed ({stmt}): {e}"))
+                sqlx::query(stmt).execute(&mut *tx).await.map_err(|error| {
+                    map_postgres_error_with_context(
+                        format!("enum creation failed for statement `{stmt}`"),
+                        error,
+                    )
                 })?;
             }
 
@@ -271,21 +277,28 @@ impl StorageAdapter for PostgresAdapter {
                 perms_doc_idx.as_str(),
             ];
             for stmt in ddl_statements {
-                sqlx::query(stmt)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| DatabaseError::Other(format!("DDL failed ({stmt}): {e}")))?;
+                sqlx::query(stmt).execute(&mut *tx).await.map_err(|error| {
+                    map_postgres_error_with_context(
+                        format!("DDL failed for statement `{stmt}`"),
+                        error,
+                    )
+                })?;
             }
             for stmt in &schema_indexes {
-                sqlx::query(stmt)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| DatabaseError::Other(format!("index DDL failed ({stmt}): {e}")))?;
+                sqlx::query(stmt).execute(&mut *tx).await.map_err(|error| {
+                    map_postgres_error_with_context(
+                        format!("index DDL failed for statement `{stmt}`"),
+                        error,
+                    )
+                })?;
             }
 
-            tx.commit()
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            tx.commit().await.map_err(|error| {
+                map_postgres_error_with_context(
+                    "failed to commit create_collection transaction",
+                    error,
+                )
+            })?;
             Ok(())
         })
     }
@@ -367,16 +380,14 @@ impl StorageAdapter for PostgresAdapter {
                 PostgresUtils::quote_identifier(database_core::COLUMN_SEQUENCE)?
             ));
 
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let mut tx = pool.begin().await.map_err(|error| {
+                map_postgres_error_with_context("failed to start insert transaction", error)
+            })?;
 
-            let rows = builder
-                .build()
-                .fetch_all(&mut *tx)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let rows =
+                builder.build().fetch_all(&mut *tx).await.map_err(|error| {
+                    map_postgres_error_with_context("failed to insert rows", error)
+                })?;
 
             // ── Collect results and build perms rows ──────────────────────
             // Each entry: (document_id, permission_type, role_array)
@@ -411,15 +422,14 @@ impl StorageAdapter for PostgresAdapter {
                     sep.push_bind(pt.clone());
                     sep.push_bind(roles.clone());
                 });
-                pb.build()
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
+                pb.build().execute(&mut *tx).await.map_err(|error| {
+                    map_postgres_error_with_context("failed to insert permission rows", error)
+                })?;
             }
 
-            tx.commit()
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            tx.commit().await.map_err(|error| {
+                map_postgres_error_with_context("failed to commit insert transaction", error)
+            })?;
 
             Ok(results)
         })
@@ -458,7 +468,7 @@ impl StorageAdapter for PostgresAdapter {
                 .build()
                 .fetch_optional(&pool)
                 .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+                .map_err(map_postgres_error)?;
             row.map(|r| PostgresUtils::row_to_record_internal(&r, schema))
                 .transpose()
         })
@@ -476,10 +486,9 @@ impl StorageAdapter for PostgresAdapter {
         let id = id.to_string();
         Box::pin(async move {
             let table = PostgresUtils::qualified_table_name(&context, schema.id)?;
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let mut tx = pool.begin().await.map_err(|error| {
+                map_postgres_error_with_context("failed to start update transaction", error)
+            })?;
 
             let mut builder = QueryBuilder::<Postgres>::new(format!("UPDATE {table} AS main SET "));
             let mut first = true;
@@ -550,7 +559,7 @@ impl StorageAdapter for PostgresAdapter {
                 .build()
                 .fetch_optional(&mut *tx)
                 .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+                .map_err(|error| map_postgres_error_with_context("failed to update row", error))?;
             let record = match row {
                 Some(r) => PostgresUtils::row_to_record_internal(&r, schema)?,
                 None => return Ok(None),
@@ -568,7 +577,9 @@ impl StorageAdapter for PostgresAdapter {
                     .bind(seq)
                     .execute(&mut *tx)
                     .await
-                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
+                    .map_err(|error| {
+                        map_postgres_error_with_context("failed to replace permission rows", error)
+                    })?;
 
                 let grouped_perms = database_core::utils::permission_rows(&permissions)?;
                 for (pt, pv) in grouped_perms {
@@ -576,13 +587,20 @@ impl StorageAdapter for PostgresAdapter {
                         .bind(seq)
                         .bind(pt)
                         .bind(pv)
-                        .execute(&mut *tx).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|error| {
+                            map_postgres_error_with_context(
+                                "failed to insert replacement permission row",
+                                error,
+                            )
+                        })?;
                 }
             }
 
-            tx.commit()
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            tx.commit().await.map_err(|error| {
+                map_postgres_error_with_context("failed to commit update transaction", error)
+            })?;
             Ok(Some(record))
         })
     }
@@ -643,11 +661,10 @@ impl StorageAdapter for PostgresAdapter {
             )?;
             PostgresQuery::push_filters(&mut builder, schema, &query, &mut has_where)?;
 
-            let res = builder
-                .build()
-                .execute(&pool)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let res =
+                builder.build().execute(&pool).await.map_err(|error| {
+                    map_postgres_error_with_context("failed to update rows", error)
+                })?;
             Ok(res.rows_affected() as u64)
         })
     }
@@ -679,11 +696,10 @@ impl StorageAdapter for PostgresAdapter {
                 PermissionEnum::Delete,
                 &mut has_where,
             )?;
-            let res = builder
-                .build()
-                .execute(&pool)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let res =
+                builder.build().execute(&pool).await.map_err(|error| {
+                    map_postgres_error_with_context("failed to delete row", error)
+                })?;
             Ok(res.rows_affected() > 0)
         })
     }
@@ -710,11 +726,10 @@ impl StorageAdapter for PostgresAdapter {
                 &mut has_where,
             )?;
             PostgresQuery::push_filters(&mut builder, schema, &query, &mut has_where)?;
-            let res = builder
-                .build()
-                .execute(&pool)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let res =
+                builder.build().execute(&pool).await.map_err(|error| {
+                    map_postgres_error_with_context("failed to delete rows", error)
+                })?;
             Ok(res.rows_affected() as u64)
         })
     }
@@ -752,11 +767,10 @@ impl StorageAdapter for PostgresAdapter {
                 builder.push(" OFFSET ");
                 builder.push_bind(o as i64);
             }
-            let rows = builder
-                .build()
-                .fetch_all(&pool)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let rows =
+                builder.build().fetch_all(&pool).await.map_err(|error| {
+                    map_postgres_error_with_context("failed to query rows", error)
+                })?;
             rows.into_iter()
                 .map(|r| PostgresUtils::row_to_record_internal(&r, schema))
                 .collect()
@@ -946,11 +960,9 @@ impl StorageAdapter for PostgresAdapter {
                 }
             }
 
-            let rows = builder
-                .build()
-                .fetch_all(&pool)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let rows = builder.build().fetch_all(&pool).await.map_err(|error| {
+                map_postgres_error_with_context("failed to query related rows", error)
+            })?;
 
             let mut joined = Vec::with_capacity(rows.len());
             for row in rows {
@@ -1183,11 +1195,9 @@ impl StorageAdapter for PostgresAdapter {
                 }
             }
 
-            let rows = builder
-                .build()
-                .fetch_all(&pool)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let rows = builder.build().fetch_all(&pool).await.map_err(|error| {
+                map_postgres_error_with_context("failed to query populated rows", error)
+            })?;
 
             let mut populated_rows = Vec::with_capacity(rows.len());
             for row in rows {
@@ -1236,11 +1246,10 @@ impl StorageAdapter for PostgresAdapter {
                 &mut has_where,
             )?;
             PostgresQuery::push_filters(&mut builder, schema, &query, &mut has_where)?;
-            let row = builder
-                .build()
-                .fetch_one(&pool)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let row =
+                builder.build().fetch_one(&pool).await.map_err(|error| {
+                    map_postgres_error_with_context("failed to count rows", error)
+                })?;
             let count: i64 = row.get(0);
             Ok(count as u64)
         })

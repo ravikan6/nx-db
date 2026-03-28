@@ -1,3 +1,4 @@
+use crate::error::{map_sqlite_error, map_sqlite_error_with_context};
 use database_core::errors::DatabaseError;
 use database_core::query::{QuerySpec, SortDirection};
 use database_core::traits::storage::{
@@ -54,7 +55,7 @@ impl StorageAdapter for SqliteAdapter {
                 .execute(&pool)
                 .await
                 .map(|_| ())
-                .map_err(|e| DatabaseError::Other(e.to_string()))
+                .map_err(|error| map_sqlite_error_with_context("sqlite ping failed", error))
         })
     }
 
@@ -93,10 +94,9 @@ impl StorageAdapter for SqliteAdapter {
                 ));
             }
             let sql = format!("CREATE TABLE IF NOT EXISTS {table} ({})", cols.join(", "));
-            sqlx::query(&sql)
-                .execute(&pool)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            sqlx::query(&sql).execute(&pool).await.map_err(|error| {
+                map_sqlite_error_with_context("failed to create collection table", error)
+            })?;
 
             // Create the permissions table for document-level security.
             let perms_table = SqliteUtils::qualified_permissions_table_name(&context, schema.id);
@@ -112,7 +112,9 @@ impl StorageAdapter for SqliteAdapter {
             sqlx::query(&perms_sql)
                 .execute(&pool)
                 .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+                .map_err(|error| {
+                    map_sqlite_error_with_context("failed to create permissions table", error)
+                })?;
 
             let internal_indexes = [
                 format!(
@@ -141,7 +143,12 @@ impl StorageAdapter for SqliteAdapter {
                 sqlx::query(&statement)
                     .execute(&pool)
                     .await
-                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
+                    .map_err(|error| {
+                        map_sqlite_error_with_context(
+                            format!("failed to create internal index with statement `{statement}`"),
+                            error,
+                        )
+                    })?;
             }
 
             for index in schema.indexes {
@@ -180,7 +187,12 @@ impl StorageAdapter for SqliteAdapter {
                 sqlx::query(&statement)
                     .execute(&pool)
                     .await
-                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
+                    .map_err(|error| {
+                        map_sqlite_error_with_context(
+                            format!("failed to create schema index with statement `{statement}`"),
+                            error,
+                        )
+                    })?;
             }
 
             Ok(())
@@ -273,16 +285,14 @@ impl StorageAdapter for SqliteAdapter {
             });
             builder.push(format!(" RETURNING {COLUMN_SEQUENCE}"));
 
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let mut tx = pool.begin().await.map_err(|error| {
+                map_sqlite_error_with_context("failed to start insert transaction", error)
+            })?;
 
-            let rows = builder
-                .build()
-                .fetch_all(&mut *tx)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let rows =
+                builder.build().fetch_all(&mut *tx).await.map_err(|error| {
+                    map_sqlite_error_with_context("failed to insert rows", error)
+                })?;
 
             // ── Collect results and build perms rows ──────────────────────
             let mut perms_rows: Vec<(i64, String, String)> = Vec::new(); // (seq, type, json_roles)
@@ -319,15 +329,14 @@ impl StorageAdapter for SqliteAdapter {
                     sep.push_bind(pt.clone());
                     sep.push_bind(roles_json.clone());
                 });
-                pb.build()
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
+                pb.build().execute(&mut *tx).await.map_err(|error| {
+                    map_sqlite_error_with_context("failed to insert permission rows", error)
+                })?;
             }
 
-            tx.commit()
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            tx.commit().await.map_err(|error| {
+                map_sqlite_error_with_context("failed to commit insert transaction", error)
+            })?;
 
             Ok(results)
         })
@@ -362,7 +371,7 @@ impl StorageAdapter for SqliteAdapter {
                 .build()
                 .fetch_optional(&pool)
                 .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+                .map_err(map_sqlite_error)?;
             match row {
                 Some(r) => Ok(Some(SqliteUtils::row_to_record(&r, schema)?)),
                 None => Ok(None),
@@ -382,10 +391,9 @@ impl StorageAdapter for SqliteAdapter {
         let id = id.to_string();
         Box::pin(async move {
             let table = SqliteUtils::qualified_table_name(&context, schema.id);
-            let mut tx = pool
-                .begin()
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let mut tx = pool.begin().await.map_err(|error| {
+                map_sqlite_error_with_context("failed to start update transaction", error)
+            })?;
             let mut builder = QueryBuilder::<Sqlite>::new(format!("UPDATE {table} AS main SET "));
             let mut first = true;
 
@@ -449,7 +457,7 @@ impl StorageAdapter for SqliteAdapter {
                 .build()
                 .fetch_optional(&mut *tx)
                 .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+                .map_err(|error| map_sqlite_error_with_context("failed to update row", error))?;
             let record = match row {
                 Some(r) => SqliteUtils::row_to_record(&r, schema)?,
                 None => return Ok(None),
@@ -467,7 +475,9 @@ impl StorageAdapter for SqliteAdapter {
                     .bind(seq)
                     .execute(&mut *tx)
                     .await
-                    .map_err(|e| DatabaseError::Other(e.to_string()))?;
+                    .map_err(|error| {
+                        map_sqlite_error_with_context("failed to replace permission rows", error)
+                    })?;
 
                 let grouped_perms = database_core::utils::permission_rows(&perms)?;
                 for (pt, pv) in grouped_perms {
@@ -475,13 +485,20 @@ impl StorageAdapter for SqliteAdapter {
                         .bind(seq)
                         .bind(pt)
                         .bind(serde_json::to_string(&pv).unwrap())
-                        .execute(&mut *tx).await.map_err(|e| DatabaseError::Other(e.to_string()))?;
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|error| {
+                            map_sqlite_error_with_context(
+                                "failed to insert replacement permission row",
+                                error,
+                            )
+                        })?;
                 }
             }
 
-            tx.commit()
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            tx.commit().await.map_err(|error| {
+                map_sqlite_error_with_context("failed to commit update transaction", error)
+            })?;
             Ok(Some(record))
         })
     }
@@ -542,11 +559,10 @@ impl StorageAdapter for SqliteAdapter {
                 SqliteQuery::push_filter_for_alias(&mut builder, schema, f, Some("main"))?;
             }
 
-            let res = builder
-                .build()
-                .execute(&pool)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let res =
+                builder.build().execute(&pool).await.map_err(|error| {
+                    map_sqlite_error_with_context("failed to update rows", error)
+                })?;
             Ok(res.rows_affected() as u64)
         })
     }
@@ -578,11 +594,10 @@ impl StorageAdapter for SqliteAdapter {
                 PermissionEnum::Delete,
                 &mut has_where,
             )?;
-            let res = builder
-                .build()
-                .execute(&pool)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let res =
+                builder.build().execute(&pool).await.map_err(|error| {
+                    map_sqlite_error_with_context("failed to delete row", error)
+                })?;
             Ok(res.rows_affected() > 0)
         })
     }
@@ -612,11 +627,10 @@ impl StorageAdapter for SqliteAdapter {
                 SqliteQuery::push_condition_separator(&mut builder, &mut has_where);
                 SqliteQuery::push_filter_for_alias(&mut builder, schema, f, Some("main"))?;
             }
-            let res = builder
-                .build()
-                .execute(&pool)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let res =
+                builder.build().execute(&pool).await.map_err(|error| {
+                    map_sqlite_error_with_context("failed to delete rows", error)
+                })?;
             Ok(res.rows_affected() as u64)
         })
     }
@@ -678,11 +692,10 @@ impl StorageAdapter for SqliteAdapter {
                 builder.push(" OFFSET ");
                 builder.push_bind(o as i64);
             }
-            let rows = builder
-                .build()
-                .fetch_all(&pool)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let rows =
+                builder.build().fetch_all(&pool).await.map_err(|error| {
+                    map_sqlite_error_with_context("failed to query rows", error)
+                })?;
             let mut results = Vec::new();
             for r in rows {
                 results.push(SqliteUtils::row_to_record(&r, schema)?);
@@ -900,11 +913,9 @@ impl StorageAdapter for SqliteAdapter {
                 }
             }
 
-            let rows = builder
-                .build()
-                .fetch_all(&pool)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let rows = builder.build().fetch_all(&pool).await.map_err(|error| {
+                map_sqlite_error_with_context("failed to query related rows", error)
+            })?;
 
             let mut joined = Vec::with_capacity(rows.len());
             for row in rows {
@@ -1159,11 +1170,9 @@ impl StorageAdapter for SqliteAdapter {
                 }
             }
 
-            let rows = builder
-                .build()
-                .fetch_all(&pool)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let rows = builder.build().fetch_all(&pool).await.map_err(|error| {
+                map_sqlite_error_with_context("failed to query populated rows", error)
+            })?;
 
             let mut populated_rows = Vec::with_capacity(rows.len());
             for row in rows {
@@ -1211,11 +1220,10 @@ impl StorageAdapter for SqliteAdapter {
                 SqliteQuery::push_condition_separator(&mut builder, &mut has_where);
                 SqliteQuery::push_filter(&mut builder, schema, f)?;
             }
-            let row = builder
-                .build()
-                .fetch_one(&pool)
-                .await
-                .map_err(|e| DatabaseError::Other(e.to_string()))?;
+            let row =
+                builder.build().fetch_one(&pool).await.map_err(|error| {
+                    map_sqlite_error_with_context("failed to count rows", error)
+                })?;
             let count: i64 = row.get(0);
             Ok(count as u64)
         })

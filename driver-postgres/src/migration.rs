@@ -1,4 +1,5 @@
 use crate::driver::PostgresAdapter;
+use crate::error::map_postgres_error_with_context;
 use database_core::errors::DatabaseError;
 use database_core::traits::migration::{MigrationCollection, MigrationIndex};
 use database_core::{
@@ -82,7 +83,9 @@ impl<'a> MigrationEngine<'a> {
         .fetch_one(self.pool)
         .await
         .map(|row| row.get(0))
-        .map_err(|e| DatabaseError::Other(format!("failed to check table existence: {e}")))?;
+        .map_err(|error| {
+            map_postgres_error_with_context("failed to check table existence", error)
+        })?;
 
         if !exists {
             changes.push(MigrationChange::CreateTable(table_name.to_string()));
@@ -97,7 +100,7 @@ impl<'a> MigrationEngine<'a> {
         .bind(table_name)
         .fetch_all(self.pool)
         .await
-        .map_err(|e| DatabaseError::Other(format!("failed to fetch columns: {e}")))?
+        .map_err(|error| map_postgres_error_with_context("failed to fetch columns", error))?
         .into_iter()
         .map(|row| (row.get(0), row.get(1)))
         .collect();
@@ -111,7 +114,7 @@ impl<'a> MigrationEngine<'a> {
         .bind(db_schema)
         .fetch_all(self.pool)
         .await
-        .map_err(|e| DatabaseError::Other(format!("failed to fetch types: {e}")))?
+        .map_err(|error| map_postgres_error_with_context("failed to fetch enum types", error))?
         .into_iter()
         .map(|row| row.get(0))
         .collect();
@@ -165,7 +168,7 @@ impl<'a> MigrationEngine<'a> {
         .bind(db_schema)
         .fetch_all(self.pool)
         .await
-        .map_err(|e| DatabaseError::Other(format!("failed to fetch indexes: {e}")))?
+        .map_err(|error| map_postgres_error_with_context("failed to fetch indexes", error))?
         .into_iter()
         .map(|row| (row.get(0), row.get(1)))
         .collect();
@@ -240,8 +243,8 @@ impl<'a> MigrationEngine<'a> {
                     .join(", ");
                 let sql = format!("CREATE TYPE {} AS ENUM ({})", full_type_name, elements_str);
                 println!("Executing: {}", sql);
-                self.pool.execute(sql.as_str()).await.map_err(|e| {
-                    DatabaseError::Other(format!("failed to create enum type: {e}"))
+                self.pool.execute(sql.as_str()).await.map_err(|error| {
+                    map_postgres_error_with_context("failed to create enum type", error)
                 })?;
                 Ok(())
             }
@@ -262,20 +265,18 @@ impl<'a> MigrationEngine<'a> {
                 );
 
                 println!("Executing: {}", sql);
-                self.pool
-                    .execute(sql.as_str())
-                    .await
-                    .map_err(|e| DatabaseError::Other(format!("failed to add column: {e}")))?;
+                self.pool.execute(sql.as_str()).await.map_err(|error| {
+                    map_postgres_error_with_context("failed to add column", error)
+                })?;
                 Ok(())
             }
             MigrationChange::CreateIndex { sql, .. } => {
                 let sql = sql.replace("CREATE INDEX ", "CREATE INDEX IF NOT EXISTS ");
                 let sql = sql.replace("CREATE UNIQUE INDEX ", "CREATE UNIQUE INDEX IF NOT EXISTS ");
                 println!("Executing: {}", sql);
-                self.pool
-                    .execute(sql.as_str())
-                    .await
-                    .map_err(|e| DatabaseError::Other(format!("failed to create index: {e}")))?;
+                self.pool.execute(sql.as_str()).await.map_err(|error| {
+                    map_postgres_error_with_context("failed to create index", error)
+                })?;
                 Ok(())
             }
             MigrationChange::DropIndex { index_id, .. } => {
@@ -283,10 +284,9 @@ impl<'a> MigrationEngine<'a> {
                 let index_name = PostgresAdapter::quote_identifier(&index_id)?;
                 let sql = format!("DROP INDEX IF EXISTS {}.{}", schema_name, index_name);
                 println!("Executing: {}", sql);
-                self.pool
-                    .execute(sql.as_str())
-                    .await
-                    .map_err(|e| DatabaseError::Other(format!("failed to drop index: {e}")))?;
+                self.pool.execute(sql.as_str()).await.map_err(|error| {
+                    map_postgres_error_with_context("failed to drop index", error)
+                })?;
                 Ok(())
             }
         }
@@ -433,19 +433,17 @@ impl<'a> MigrationEngine<'a> {
             statements.push(statement);
         }
 
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| DatabaseError::Other(format!("failed to start transaction: {e}")))?;
+        let mut tx = self.pool.begin().await.map_err(|error| {
+            map_postgres_error_with_context("failed to start migration transaction", error)
+        })?;
         for statement in statements {
-            tx.execute(statement.as_str())
-                .await
-                .map_err(|e| DatabaseError::Other(format!("failed to execute statement: {e}")))?;
+            tx.execute(statement.as_str()).await.map_err(|error| {
+                map_postgres_error_with_context("failed to execute migration statement", error)
+            })?;
         }
-        tx.commit()
-            .await
-            .map_err(|e| DatabaseError::Other(format!("failed to commit transaction: {e}")))?;
+        tx.commit().await.map_err(|error| {
+            map_postgres_error_with_context("failed to commit migration transaction", error)
+        })?;
 
         Ok(())
     }

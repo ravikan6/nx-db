@@ -232,13 +232,13 @@ where
         for sort in query.sorts() {
             if !is_system_field(sort.field) {
                 let attribute = collection.attribute(sort.field).ok_or_else(|| {
-                    DatabaseError::Other(format!(
+                    DatabaseError::Validation(format!(
                         "collection '{}': unknown sort field '{}'",
                         collection.id, sort.field
                     ))
                 })?;
                 if attribute.persistence != crate::AttributePersistence::Persisted {
-                    return Err(DatabaseError::Other(format!(
+                    return Err(DatabaseError::Validation(format!(
                         "collection '{}': virtual field '{}' cannot be used in sorts",
                         collection.id, sort.field
                     )));
@@ -264,7 +264,7 @@ where
                         ))
                     })?;
                     if attribute.persistence != crate::AttributePersistence::Persisted {
-                        return Err(DatabaseError::Other(format!(
+                        return Err(DatabaseError::Validation(format!(
                             "collection '{}': virtual field '{}' cannot be used in filters",
                             collection.id, field
                         )));
@@ -835,8 +835,9 @@ where
         let mut roles = Vec::new();
 
         for permission in permissions {
-            let permission = Permission::parse(permission)
-                .map_err(|error| DatabaseError::Other(format!("invalid permission: {error}")))?;
+            let permission = Permission::parse(permission).map_err(|error| {
+                DatabaseError::Validation(format!("invalid permission: {error}"))
+            })?;
 
             let matches = match (permission.permission(), action) {
                 (PermissionEnum::Write, PermissionEnum::Create)
@@ -2327,7 +2328,7 @@ mod tests {
         let error =
             block_on(repo.get(&id)).expect_err("invalid collection permissions should fail");
         assert!(
-            matches!(error, DatabaseError::Other(message) if message.contains("invalid permission"))
+            matches!(error, DatabaseError::Validation(message) if message.contains("invalid permission"))
         );
     }
 
