@@ -268,7 +268,9 @@ impl crate::traits::migration::MigrationCollection for &'static CollectionSchema
                 length: a.length,
                 default: a.default,
                 persistence: a.persistence,
-                elements: a.elements.map(|e| e.iter().map(|s| s.to_string()).collect()),
+                elements: a
+                    .elements
+                    .map(|e| e.iter().map(|s| s.to_string()).collect()),
             })
             .collect()
     }
@@ -307,6 +309,7 @@ mod tests {
             default: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
+            elements: None,
             relationship: None,
         },
         AttributeSchema {
@@ -319,6 +322,7 @@ mod tests {
             default: Some(DefaultValue::Int(0)),
             persistence: AttributePersistence::Persisted,
             filters: &[],
+            elements: None,
             relationship: None,
         },
         AttributeSchema {
@@ -331,6 +335,7 @@ mod tests {
             default: None,
             persistence: AttributePersistence::Persisted,
             filters: &[],
+            elements: None,
             relationship: Some(RelationshipSchema {
                 related_collection: "users",
                 kind: RelationshipKind::ManyToOne,

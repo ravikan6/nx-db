@@ -94,11 +94,7 @@ impl PostgresUtils {
             AttributeKind::Json => "JSONB".to_string(),
             AttributeKind::Enum => custom_type.unwrap_or("TEXT").to_string(),
         };
-        if array {
-            format!("{base}[]")
-        } else {
-            base
-        }
+        if array { format!("{base}[]") } else { base }
     }
 
     pub fn column_for_field(

@@ -145,7 +145,6 @@ fn expand_entity(input: DeriveInput) -> syn::Result<TokenStream2> {
                 Ok(Self {
                     #metadata_ident: ::nx_db::Metadata {
                         sequence: ::nx_db::get_required(&record, ::nx_db::FIELD_SEQUENCE)?,
-                        uid: ::nx_db::get_required(&record, ::nx_db::FIELD_ID)?,
                         created_at: ::nx_db::get_required(&record, ::nx_db::FIELD_CREATED_AT)?,
                         updated_at: ::nx_db::get_required(&record, ::nx_db::FIELD_UPDATED_AT)?,
                         permissions: ::nx_db::get_required(&record, ::nx_db::FIELD_PERMISSIONS)?,

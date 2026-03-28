@@ -315,8 +315,8 @@ macro_rules! impl_model {
         }
         $(, virtuals: { $($virtual_field:ident),* })?
         $(, loaded: { $($loaded_field:ident),* })?
-        $(, loaded_one: { $($loaded_one_field:ident : $loaded_one_model:ident),* })?
-        $(, loaded_many: { $($loaded_many_field:ident : $loaded_many_model:ident),* })?
+        $(, loaded_one: { $($loaded_one_field:ident),* })?
+        $(, loaded_many: { $($loaded_many_field:ident),* })?
         $(, resolvers: { $($resolver_field:ident : $resolver_fn:path),* })?
     ) => {
         impl $crate::Model for $model_name {
@@ -343,22 +343,6 @@ macro_rules! impl_model {
                         entity.$resolver_field = Some($resolver_fn(&entity, context).await?);
                     )*)?
                     Ok(entity)
-                })
-            }
-
-            fn populate_entities<'a>(
-                entities: &'a mut [Self::Entity],
-                context: &'a $crate::Context,
-                db: &'a dyn $crate::model::PopulateContext,
-            ) -> $crate::model::ModelFuture<'a, Result<(), $crate::errors::DatabaseError>> {
-                Box::pin(async move {
-                    $($(
-                        db.populate_related::<$loaded_one_model>(context, entities, stringify!($loaded_one_field)).await?;
-                    )*)?
-                    $($(
-                        db.populate_related::<$loaded_many_model>(context, entities, stringify!($loaded_many_field)).await?;
-                    )*)?
-                    Ok(())
                 })
             }
 
@@ -391,7 +375,6 @@ macro_rules! impl_model {
                 Ok($entity_name {
                     _metadata: $crate::Metadata {
                         sequence: $crate::get_required(&record, $crate::FIELD_SEQUENCE)?,
-                        uid: $crate::get_required(&record, $crate::FIELD_ID)?,
                         created_at: $crate::get_required(&record, $crate::FIELD_CREATED_AT)?,
                         updated_at: $crate::get_required(&record, $crate::FIELD_UPDATED_AT)?,
                         permissions: $crate::get_required(&record, $crate::FIELD_PERMISSIONS)?,

@@ -325,7 +325,12 @@ pub fn validate_project_spec(spec: &ProjectSpec) -> Result<(), CodegenError> {
             }
 
             if attribute.kind == AttributeKindSpec::Enum {
-                if attribute.elements.as_ref().map(|e| e.is_empty()).unwrap_or(true) {
+                if attribute
+                    .elements
+                    .as_ref()
+                    .map(|e| e.is_empty())
+                    .unwrap_or(true)
+                {
                     return Err(CodegenError::Invalid(format!(
                         "collection '{}': enum attribute '{}' must declare elements",
                         collection.id, attribute.id
@@ -1256,24 +1261,10 @@ fn emit_collection(
             continue;
         }
         if attribute_is_relation_one(attribute) {
-            let rel = attribute.relationship.as_ref().unwrap();
-            let related_collection = spec
-                .collections
-                .iter()
-                .find(|c| c.id == rel.related_collection)
-                .unwrap();
-            let related_model = default_model_name(related_collection);
-            loaded_one_lines.push(format!("{} : {}", loaded_relation_field_name(attribute), related_model));
+            loaded_one_lines.push(loaded_relation_field_name(attribute));
         }
         if attribute_is_relation_many(attribute) {
-            let rel = attribute.relationship.as_ref().unwrap();
-            let related_collection = spec
-                .collections
-                .iter()
-                .find(|c| c.id == rel.related_collection)
-                .unwrap();
-            let related_model = default_model_name(related_collection);
-            loaded_many_lines.push(format!("{} : {}", rust_field_name(&attribute.id), related_model));
+            loaded_many_lines.push(rust_field_name(&attribute.id));
             continue;
         }
         let field_id = &attribute.id;
@@ -1397,10 +1388,7 @@ fn on_delete_action_expr(action: OnDeleteActionSpec) -> &'static str {
     }
 }
 
-fn storage_field_base_type(
-    collection: &CollectionSpec,
-    attribute: &AttributeSpec,
-) -> String {
+fn storage_field_base_type(collection: &CollectionSpec, attribute: &AttributeSpec) -> String {
     let base = match attribute.kind {
         AttributeKindSpec::String | AttributeKindSpec::Relationship => "String".to_string(),
         AttributeKindSpec::Integer => "i64".to_string(),

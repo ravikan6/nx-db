@@ -1124,6 +1124,7 @@ mod tests {
         array: false,
         length: None,
         default: None,
+        elements: None,
         persistence: AttributePersistence::Persisted,
         filters: &[],
         relationship: None,
@@ -1515,10 +1516,6 @@ mod tests {
                 Some(StorageValue::Int(v)) => v,
                 _ => 0,
             },
-            uid: match record.get(FIELD_ID) {
-                Some(StorageValue::String(v)) => v.clone(),
-                _ => "".into(),
-            },
             created_at: match record.remove(FIELD_CREATED_AT) {
                 Some(StorageValue::Timestamp(v)) => v,
                 _ => time::OffsetDateTime::now_utc(),
@@ -1548,7 +1545,6 @@ mod tests {
     #[derive(Debug, Clone, Copy)]
     struct User;
 
-    const USER: User = User;
     const USER_ID_FIELD: Field<User, Key<32>> = Field::new(crate::FIELD_ID);
     const USER_NAME_FIELD: Field<User, String> = Field::new("name");
 
@@ -2601,31 +2597,5 @@ mod tests {
             (Some(_), None) | (Some(_), Some(StorageValue::Null)) => std::cmp::Ordering::Greater,
             _ => std::cmp::Ordering::Equal,
         }
-    }
-}
-
-impl<A, R, E> crate::model::PopulateContext for Database<A, R, E>
-where
-    A: StorageAdapter,
-    R: CollectionRegistry + Sync,
-    E: EventBus + Sync,
-{
-    fn populate_related<'a, M: Model>(
-        &'a self,
-        context: &'a Context,
-        entities: &'a mut [M::Entity],
-        name: &'static str,
-    ) -> crate::model::ModelFuture<'a, Result<(), DatabaseError>>
-    where
-        M::Entity: serde::Serialize + serde::de::DeserializeOwned,
-    {
-        Box::pin(async move {
-            let repo = self.scope(context.clone()).repo::<M>();
-            // Use the repository's built-in batch population logic.
-            // We need to map the string name back to a Rel descriptor.
-            // This is usually done in the generated code by calling specific populate methods.
-            // For now, we'll assume the generated code calls repo methods directly.
-            Ok(())
-        })
     }
 }

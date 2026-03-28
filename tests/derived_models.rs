@@ -1,5 +1,8 @@
 use nx_db::traits::storage::{AdapterFuture, StorageAdapter, StorageRecord, StorageValue};
-use nx_db::{CollectionSchema, Context, Database, DatabaseError, Field, QuerySpec, StaticRegistry};
+use nx_db::{
+    CollectionSchema, Context, Database, DatabaseError, EntityRecord, Field, QuerySpec,
+    RelationMany, RelationOne, StaticRegistry,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
@@ -25,6 +28,20 @@ struct DerivedUserEntity {
     email: Option<String>,
     #[nx(field = "active", required)]
     active: bool,
+    #[nx(metadata)]
+    _metadata: nx_db::Metadata,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, nx_db::NxEntity)]
+struct DerivedProfileEntity {
+    #[nx(id)]
+    id: nx_db::Key<48>,
+    #[nx(field = "label", required)]
+    label: String,
+    #[nx(loaded_one)]
+    owner: RelationOne<DerivedUserEntity>,
+    #[nx(loaded_many)]
+    reviewers: RelationMany<DerivedUserEntity>,
     #[nx(metadata)]
     _metadata: nx_db::Metadata,
 }
@@ -71,6 +88,7 @@ const DERIVED_USERS_ATTRIBUTES: &[nx_db::AttributeSchema] = &[
         default: None,
         persistence: nx_db::AttributePersistence::Persisted,
         filters: &[],
+        elements: None,
         relationship: None,
     },
     nx_db::AttributeSchema {
@@ -83,6 +101,7 @@ const DERIVED_USERS_ATTRIBUTES: &[nx_db::AttributeSchema] = &[
         default: None,
         persistence: nx_db::AttributePersistence::Persisted,
         filters: &[],
+        elements: None,
         relationship: None,
     },
     nx_db::AttributeSchema {
@@ -95,6 +114,7 @@ const DERIVED_USERS_ATTRIBUTES: &[nx_db::AttributeSchema] = &[
         default: None,
         persistence: nx_db::AttributePersistence::Persisted,
         filters: &[],
+        elements: None,
         relationship: None,
     },
 ];
@@ -351,4 +371,34 @@ async fn derive_based_model_flow_works_with_bridge_macro() {
 
     assert_eq!(updated.name, DisplayName("ravikan".into()));
     assert_eq!(updated.email.as_deref(), Some("rk@example.com"));
+}
+
+#[test]
+fn derive_entity_initializes_loaded_relationship_fields() {
+    let mut record = StorageRecord::new();
+    record.insert(
+        nx_db::FIELD_ID.to_string(),
+        StorageValue::String("profile-1".into()),
+    );
+    record.insert("label".to_string(), StorageValue::String("primary".into()));
+    record.insert(nx_db::FIELD_SEQUENCE.to_string(), StorageValue::Int(1));
+    record.insert(
+        nx_db::FIELD_CREATED_AT.to_string(),
+        StorageValue::Timestamp(nx_db::time::OffsetDateTime::now_utc()),
+    );
+    record.insert(
+        nx_db::FIELD_UPDATED_AT.to_string(),
+        StorageValue::Timestamp(nx_db::time::OffsetDateTime::now_utc()),
+    );
+    record.insert(
+        nx_db::FIELD_PERMISSIONS.to_string(),
+        StorageValue::StringArray(vec![]),
+    );
+
+    let entity = <DerivedProfileEntity as EntityRecord>::from_record(record, &Context::default())
+        .expect("record should decode");
+
+    assert_eq!(entity.label, "primary");
+    assert!(matches!(entity.owner, RelationOne::NotLoaded));
+    assert!(matches!(entity.reviewers, RelationMany::NotLoaded));
 }

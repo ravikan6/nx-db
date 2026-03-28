@@ -253,10 +253,9 @@ impl StorageAdapter for PostgresAdapter {
                 .map_err(|e| DatabaseError::Other(e.to_string()))?;
 
             for stmt in &enum_statements {
-                sqlx::query(stmt)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(|e| DatabaseError::Other(format!("Enum creation failed ({stmt}): {e}")))?;
+                sqlx::query(stmt).execute(&mut *tx).await.map_err(|e| {
+                    DatabaseError::Other(format!("Enum creation failed ({stmt}): {e}"))
+                })?;
             }
 
             let ddl_statements: &[&str] = &[

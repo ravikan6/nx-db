@@ -24,6 +24,7 @@ const RESTRICTED_ATTRIBUTES: &[AttributeSchema] = &[AttributeSchema {
     kind: AttributeKind::String,
     required: true,
     array: false,
+    elements: None,
     persistence: AttributePersistence::Persisted,
     filters: &[],
     relationship: None,

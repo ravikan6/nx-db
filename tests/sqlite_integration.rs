@@ -352,6 +352,7 @@ const USER_WITH_ROLES_ATTRIBUTES: &[AttributeSchema] = &[
         default: None,
         persistence: AttributePersistence::Persisted,
         filters: &[],
+        elements: None,
         relationship: None,
     },
     AttributeSchema {
@@ -364,6 +365,7 @@ const USER_WITH_ROLES_ATTRIBUTES: &[AttributeSchema] = &[
         default: None,
         persistence: AttributePersistence::Virtual,
         filters: &[],
+        elements: None,
         relationship: Some(nx_db::RelationshipSchema {
             related_collection: "profiles",
             kind: nx_db::RelationshipKind::OneToOne,
@@ -388,6 +390,7 @@ const ROLE_ATTRIBUTES: &[AttributeSchema] = &[AttributeSchema {
     default: None,
     persistence: AttributePersistence::Persisted,
     filters: &[],
+    elements: None,
     relationship: None,
 }];
 
@@ -402,6 +405,7 @@ const USER_ROLE_ATTRIBUTES: &[AttributeSchema] = &[
         default: None,
         persistence: AttributePersistence::Persisted,
         filters: &[],
+        elements: None,
         relationship: None,
     },
     AttributeSchema {
@@ -414,6 +418,7 @@ const USER_ROLE_ATTRIBUTES: &[AttributeSchema] = &[
         default: None,
         persistence: AttributePersistence::Persisted,
         filters: &[],
+        elements: None,
         relationship: None,
     },
 ];
@@ -429,6 +434,7 @@ const PROFILE_ATTRIBUTES: &[AttributeSchema] = &[
         default: None,
         persistence: AttributePersistence::Persisted,
         filters: &[],
+        elements: None,
         relationship: None,
     },
     AttributeSchema {
@@ -441,6 +447,7 @@ const PROFILE_ATTRIBUTES: &[AttributeSchema] = &[
         default: None,
         persistence: AttributePersistence::Persisted,
         filters: &[],
+        elements: None,
         relationship: None,
     },
 ];

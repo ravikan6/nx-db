@@ -94,6 +94,7 @@ mod tests {
         array: false,
         length: None,
         default: None,
+        elements: None,
         persistence: AttributePersistence::Persisted,
         filters: &[],
         relationship: None,

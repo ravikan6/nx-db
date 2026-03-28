@@ -593,57 +593,20 @@ where
             .await
     }
 
-    /// Return all documents matching `query`, with relationships populated.
-    pub async fn find_including(&self, query: QuerySpec) -> Result<Vec<M::Entity>, DatabaseError>
-    where
-        M::Entity: serde::Serialize + serde::de::DeserializeOwned,
-    {
-        let mut entities = self.find(query).await?;
-        self.populate_many(&mut entities).await?;
-        Ok(entities)
+    /// Return all documents matching `query`.
+    pub async fn find(&self, query: QuerySpec) -> Result<Vec<M::Entity>, DatabaseError> {
+        self.database.find_models::<M>(&self.context, &query).await
     }
 
-    /// Return the first document matching `query`, with relationships populated.
-    pub async fn find_one_including(
-        &self,
-        query: QuerySpec,
-    ) -> Result<Option<M::Entity>, DatabaseError>
-    where
-        M::Entity: serde::Serialize + serde::de::DeserializeOwned,
-    {
-        let mut entities = self.find_including(query.limit(1)).await?;
+    /// Return the first document matching `query`, or `None`.
+    pub async fn find_one(&self, query: QuerySpec) -> Result<Option<M::Entity>, DatabaseError> {
+        let mut entities = self.find(query.limit(1)).await?;
         Ok(entities.pop())
-    }
-
-    /// Batch-populate relationships for a slice of entities.
-    pub async fn populate_many(&self, entities: &mut [M::Entity]) -> Result<(), DatabaseError>
-    where
-        M::Entity: serde::Serialize + serde::de::DeserializeOwned,
-    {
-        M::populate_entities(entities, &self.context, self.database).await
     }
 
     /// Count documents matching `query`.
     pub async fn count(&self, query: QuerySpec) -> Result<u64, DatabaseError> {
         self.database.count_models::<M>(&self.context, &query).await
-    }
-
-    /// Return all documents matching `query`, with relationships populated.
-    pub async fn find_including(&self, query: QuerySpec) -> Result<Vec<M::Entity>, DatabaseError>
-    where
-        M::Entity: serde::Serialize + serde::de::DeserializeOwned,
-    {
-        let mut entities = self.find(query).await?;
-        self.populate_many(&mut entities).await?;
-        Ok(entities)
-    }
-
-    /// Batch-populate relationships for a slice of entities.
-    pub async fn populate_many(&self, entities: &mut [M::Entity]) -> Result<(), DatabaseError>
-    where
-        M::Entity: serde::Serialize + serde::de::DeserializeOwned,
-    {
-        M::populate_entities(entities, &self.context, self.database).await
     }
 
     // ── Batch relationship loading ─────────────────────────────────────────

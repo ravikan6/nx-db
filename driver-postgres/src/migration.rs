@@ -240,10 +240,9 @@ impl<'a> MigrationEngine<'a> {
                     .join(", ");
                 let sql = format!("CREATE TYPE {} AS ENUM ({})", full_type_name, elements_str);
                 println!("Executing: {}", sql);
-                self.pool
-                    .execute(sql.as_str())
-                    .await
-                    .map_err(|e| DatabaseError::Other(format!("failed to create enum type: {e}")))?;
+                self.pool.execute(sql.as_str()).await.map_err(|e| {
+                    DatabaseError::Other(format!("failed to create enum type: {e}"))
+                })?;
                 Ok(())
             }
             MigrationChange::AddColumn {
