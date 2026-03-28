@@ -2,10 +2,8 @@
 // Do not edit by hand.
 
 #[allow(dead_code)]
-#[allow(unused_imports)]
 pub mod filtered_app_models {
-    use nx_db::traits::storage::StorageRecord;
-    use nx_db::{insert_value, take_optional, take_required, get_optional, get_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, EncodedField, Field, Key, Model, Patch, QuerySpec, RelationshipKind, RelationshipSchema, RelationshipSide, StaticRegistry, FIELD_ID, FIELD_SEQUENCE, FIELD_CREATED_AT, FIELD_UPDATED_AT, FIELD_PERMISSIONS};
+    use nx_db::{AttributeKind, AttributeSchema, CollectionSchema, Key, Patch, FIELD_ID, DatabaseError};
 
     pub type UserId = Key<48>;
 

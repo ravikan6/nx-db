@@ -498,17 +498,6 @@ pub fn generate(spec: &ProjectSpec) -> Result<String, CodegenError> {
     validate_project_spec(spec)?;
 
     let mut out = String::new();
-    let _needs_take_optional = spec
-        .collections
-        .iter()
-        .flat_map(|collection| collection.attributes.iter())
-        .any(|attribute| !attribute.required && attribute.kind != AttributeKindSpec::Virtual);
-    let needs_encoded_field = spec.collections.iter().any(|collection| {
-        collection
-            .attributes
-            .iter()
-            .any(|attribute| !attribute.filters.is_empty())
-    });
     let module_name = spec
         .module
         .as_deref()
@@ -519,29 +508,26 @@ pub fn generate(spec: &ProjectSpec) -> Result<String, CodegenError> {
     writeln!(&mut out, "// Do not edit by hand.").unwrap();
     writeln!(&mut out).unwrap();
     writeln!(&mut out, "#[allow(dead_code)]").unwrap();
-    writeln!(&mut out, "#[allow(unused_imports)]").unwrap();
     writeln!(&mut out, "pub mod {module_name} {{").unwrap();
-    writeln!(&mut out, "    use nx_db::traits::storage::StorageRecord;").unwrap();
-    let needs_model_future = spec.collections.iter().any(|collection| {
+    let needs_database_error = spec.collections.iter().any(|collection| {
         collection
             .attributes
             .iter()
-            .any(|attribute| attribute.kind == AttributeKindSpec::Virtual)
+            .any(|attribute| !attribute.filters.is_empty())
     });
-    let mut optional_imports = String::new();
-    if needs_encoded_field {
-        optional_imports.push_str("EncodedField, ");
-    }
-    if needs_model_future {
-        optional_imports.push_str("ModelFuture, ");
+    let mut imports = vec![
+        "AttributeKind",
+        "AttributeSchema",
+        "CollectionSchema",
+        "Key",
+        "Patch",
+        "FIELD_ID",
+    ];
+    if needs_database_error {
+        imports.push("DatabaseError");
     }
 
-    writeln!(
-        &mut out,
-        "    use nx_db::{{insert_value, take_optional, take_required, get_optional, get_required, AttributeKind, AttributePersistence, AttributeSchema, CollectionSchema, Context, DatabaseError, {}Field, Key, Model, Patch, QuerySpec, RelationshipKind, RelationshipSchema, RelationshipSide, StaticRegistry, FIELD_ID, FIELD_SEQUENCE, FIELD_CREATED_AT, FIELD_UPDATED_AT, FIELD_PERMISSIONS}};",
-        optional_imports
-    )
-    .unwrap();
+    writeln!(&mut out, "    use nx_db::{{{}}};", imports.join(", ")).unwrap();
     writeln!(&mut out).unwrap();
 
     for collection in &spec.collections {
